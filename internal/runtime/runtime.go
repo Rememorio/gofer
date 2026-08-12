@@ -46,6 +46,7 @@ type RunnerConfig struct {
 	Provider         model.Provider
 	Tools            *tool.Registry
 	Middleware       []Middleware
+	FinishHooks      []FinishHook
 	MaxTurns         int
 	MaxParallelTools int
 	Now              func() time.Time
@@ -57,6 +58,7 @@ type Runner struct {
 	provider         model.Provider
 	tools            *tool.Registry
 	middleware       []Middleware
+	finishHooks      []FinishHook
 	maxTurns         int
 	maxParallelTools int
 	now              func() time.Time
@@ -98,6 +100,11 @@ func NewRunner(config RunnerConfig) (*Runner, error) {
 	if config.MaxTurns < 0 || config.MaxParallelTools < 0 {
 		return nil, fmt.Errorf("%w: execution limits must be positive", ErrInvalidRunner)
 	}
+	for _, hook := range config.FinishHooks {
+		if hook == nil {
+			return nil, fmt.Errorf("%w: finish hook is nil", ErrInvalidRunner)
+		}
+	}
 	if config.Now == nil {
 		config.Now = time.Now
 	}
@@ -106,6 +113,7 @@ func NewRunner(config RunnerConfig) (*Runner, error) {
 		provider:         config.Provider,
 		tools:            config.Tools,
 		middleware:       append([]Middleware(nil), config.Middleware...),
+		finishHooks:      append([]FinishHook(nil), config.FinishHooks...),
 		maxTurns:         config.MaxTurns,
 		maxParallelTools: config.MaxParallelTools,
 		now:              config.Now,
@@ -130,13 +138,14 @@ func (runner *Runner) Run(ctx context.Context, request Request) (Result, error) 
 }
 
 type execution struct {
-	runner   *Runner
-	request  Request
-	state    domain.Run
-	messages []domain.Message
-	journal  journal
-	usage    model.Usage
-	turns    int
+	runner    *Runner
+	request   Request
+	state     domain.Run
+	messages  []domain.Message
+	journal   journal
+	usage     model.Usage
+	turns     int
+	finalized bool
 }
 
 type journal struct {
@@ -393,6 +402,9 @@ func (execution *execution) persistToolOutcomes(ctx context.Context, outcomes []
 }
 
 func (execution *execution) complete(ctx context.Context) (Result, error) {
+	if err := execution.finalize(ctx); err != nil {
+		return Result{}, err
+	}
 	run, err := execution.runner.store.TransitionRun(
 		ctx, execution.state.ID, domain.RunRunning, domain.RunSucceeded, execution.runner.now(), "",
 	)
@@ -418,6 +430,7 @@ func (execution *execution) finishError(ctx context.Context, cause error) error 
 	}
 	background, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
+	finalizeErr := execution.finalize(background)
 	status := domain.RunFailed
 	kind := event.RunFailed
 	failure := cause.Error()
@@ -433,7 +446,26 @@ func (execution *execution) finishError(ctx context.Context, cause error) error 
 		execution.state = run
 	}
 	appendErr := execution.journal.append(background, kind, map[string]string{"error": cause.Error()})
-	return errors.Join(cause, transitionErr, appendErr)
+	return errors.Join(cause, finalizeErr, transitionErr, appendErr)
+}
+
+func (execution *execution) finalize(ctx context.Context) error {
+	if execution.finalized {
+		return nil
+	}
+	execution.finalized = true
+	writer := eventWriterFunc(execution.journal.append)
+	var finishErr error
+	for _, hook := range execution.runner.finishHooks {
+		if hook == nil {
+			finishErr = errors.Join(finishErr, fmt.Errorf("%w: finish hook is nil", ErrInvalidRunner))
+			continue
+		}
+		if err := hook.Finish(ctx, writer); err != nil {
+			finishErr = errors.Join(finishErr, fmt.Errorf("finish run: %w", err))
+		}
+	}
+	return finishErr
 }
 
 func (journal *journal) append(ctx context.Context, kind event.Kind, payload any) error {

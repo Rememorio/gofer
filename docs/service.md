@@ -163,6 +163,21 @@ caller buckets. By default aggregation includes successful and failed runs;
 configured context limit and reports a one-decimal percentage. Synthetic
 branch-history runs are excluded from billing totals.
 
+Run-scoped workspace review is available separately from the live event feed:
+
+```text
+GET /api/threads/{thread_id}/runs/{run_id}/workspace-changes
+GET /api/threads/{thread_id}/runs/{run_id}/workspace-changes?include_files=false
+GET /api/threads/{thread_id}/runs/{run_id}/workspace-changes?include_diff=false
+```
+
+The response contains an `available` flag, version, created/modified/deleted
+and line counts, bounded file records, and the limits applied during capture.
+Files below `/mnt/user-data/workspace` and `/mnt/user-data/outputs` participate;
+uploads do not. Sensitive-looking, binary, large, and symlink paths never
+include content. Authentication uses the same owner-scoped `runs:read`
+permission as run state and event history.
+
 Clients can discover configured capabilities and manage runtime skills without
 receiving provider credentials:
 

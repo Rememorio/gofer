@@ -44,6 +44,7 @@ Planned package groups:
 | `internal/mcp` | MCP transports, bounded discovery, and namespaced tool adapters |
 | `internal/policy` | Ordered authorization rules and tool resource extraction |
 | `internal/workspace` | Per-thread files, uploads, outputs, search, and traversal safety |
+| `internal/workspacechange` | Bounded run snapshots, privacy-aware diffs, and journal projection |
 | `internal/artifact` | Explicit user-facing output registration and streaming |
 | `internal/sandbox` | Local and isolated execution contracts |
 | `internal/browser` | Thread-scoped CDP sessions, snapshots, network guards, and browser tools |
@@ -79,3 +80,4 @@ Planned package groups:
 16. Durable thread state and files never cross an authenticated owner boundary.
 17. Conversation branches never mutate their source or expose files newer than the selected turn.
 18. Token totals are derived from immutable provider usage events and never double-count cache or reasoning detail.
+19. Workspace reviews drain child agents and commit before the terminal event; sensitive or unbounded content never enters the journal.

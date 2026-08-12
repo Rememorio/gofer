@@ -80,6 +80,43 @@ func TestChildExecutorRequiresTextResult(t *testing.T) {
 	}
 }
 
+func TestSubagentFinishHookCancelsAndDrainsChildren(t *testing.T) {
+	t.Parallel()
+	started := make(chan struct{})
+	manager, err := subagent.NewManager(context.Background(), subagent.Config{
+		Executor: testSubagentExecutor(func(ctx context.Context, _ subagent.Request) (subagent.Output, error) {
+			close(started)
+			<-ctx.Done()
+			return subagent.Output{}, ctx.Err()
+		}),
+		MaxParallel: 1, MaxChildren: 1, MaxDepth: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := manager.Spawn(context.Background(), subagent.Request{Prompt: "work", Depth: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if err = subagentFinishHook(manager).Finish(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	task, err = manager.Get(task.ID)
+	if err != nil || task.Status != subagent.Cancelled {
+		t.Fatalf("drained task = %#v, %v", task, err)
+	}
+	if _, err = manager.Spawn(context.Background(), subagent.Request{Prompt: "again", Depth: 1}); !errors.Is(err, subagent.ErrClosed) {
+		t.Fatalf("Spawn after finish = %v", err)
+	}
+}
+
+type testSubagentExecutor func(context.Context, subagent.Request) (subagent.Output, error)
+
+func (executor testSubagentExecutor) Execute(ctx context.Context, request subagent.Request) (subagent.Output, error) {
+	return executor(ctx, request)
+}
+
 func TestBuildToolsClosesChildrenOnAssemblyErrors(t *testing.T) {
 	t.Parallel()
 	service, threadWorkspace, launch := subagentFixture(t)

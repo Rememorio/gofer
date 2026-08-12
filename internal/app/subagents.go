@@ -24,6 +24,12 @@ type childExecutor struct {
 	provider  configuredProvider
 }
 
+func subagentFinishHook(manager *subagent.Manager) runtime.FinishHook {
+	return runtime.FinishFunc(func(context.Context, runtime.EventWriter) error {
+		return manager.Close()
+	})
+}
+
 func (service *Service) newSubagents(threadWorkspace *workspace.Thread, launch gateway.StartRequest, provider configuredProvider) (*subagent.Manager, error) {
 	parallel := min(service.config.Runtime.MaxParallelTools, service.config.Runtime.MaxSubagents)
 	return subagent.NewManager(service.ctx, subagent.Config{

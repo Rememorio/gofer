@@ -63,6 +63,13 @@ func TestModelUsageKindIsStable(t *testing.T) {
 	}
 }
 
+func TestWorkspaceChangesKindIsStable(t *testing.T) {
+	t.Parallel()
+	if WorkspaceChanges != "workspace_changes" || !WorkspaceChanges.valid() {
+		t.Fatalf("WorkspaceChanges = %q", WorkspaceChanges)
+	}
+}
+
 func TestNewDraftReportsEncodingFailure(t *testing.T) {
 	t.Parallel()
 

@@ -41,6 +41,7 @@ import (
 	"github.com/Rememorio/gofer/internal/tool"
 	"github.com/Rememorio/gofer/internal/tool/builtin"
 	"github.com/Rememorio/gofer/internal/workspace"
+	"github.com/Rememorio/gofer/internal/workspacechange"
 )
 
 // Service owns shared adapters and active asynchronous runs.
@@ -432,18 +433,29 @@ func (service *Service) execute(ctx context.Context, launch gateway.StartRequest
 		return
 	}
 	defer func() { _ = threadWorkspace.Close() }()
+	baseline, captureErr := workspacechange.Capture(threadWorkspace, workspacechange.Limits{})
+	if captureErr != nil {
+		service.logger.Warn("workspace baseline capture failed", "run_id", launch.RunID, "error", captureErr)
+	} else {
+		defer func() { _ = baseline.Close() }()
+	}
 	registry, middleware, children, err := service.buildTools(threadWorkspace, launch, provider)
 	if err != nil {
 		service.failPending(launch, err)
 		return
 	}
 	defer func() { _ = children.Close() }()
+	finishHooks := []runtime.FinishHook{subagentFinishHook(children)}
+	if baseline != nil {
+		finishHooks = append(finishHooks, service.workspaceFinishHook(threadWorkspace, baseline, launch.RunID))
+	}
 	if service.skills != nil {
 		settings.system = strings.TrimSpace(settings.system + "\n\n" + service.skills.IndexPrompt())
 	}
 	runner, err := runtime.NewRunner(runtime.RunnerConfig{
 		Store: service.store, Provider: provider.provider, Tools: registry, Middleware: middleware,
-		MaxTurns: service.config.Runtime.MaxTurns, MaxParallelTools: service.config.Runtime.MaxParallelTools,
+		FinishHooks: finishHooks,
+		MaxTurns:    service.config.Runtime.MaxTurns, MaxParallelTools: service.config.Runtime.MaxParallelTools,
 	})
 	if err != nil {
 		service.failPending(launch, err)

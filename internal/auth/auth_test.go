@@ -119,6 +119,7 @@ func TestGatewayPolicyResourceRoutes(t *testing.T) {
 		{http.MethodPost, "/api/memory/facts", MemoryWrite},
 		{http.MethodGet, "/api/memory-extra", Admin},
 		{http.MethodPost, "/api/threads/x/runs/y/stream", RunsRead},
+		{http.MethodGet, "/api/threads/x/runs/y/workspace-changes", RunsRead},
 		{http.MethodPost, "/api/threads/x/runs/y/stream?action=interrupt", RunsCancel},
 		{http.MethodPut, "/api/threads/x/runs/y/feedback", ThreadsWrite},
 		{http.MethodGet, "/api/threads/x/runs/y/feedback/stats", ThreadsRead},

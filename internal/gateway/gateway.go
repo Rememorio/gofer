@@ -15,6 +15,7 @@ import (
 	"github.com/Rememorio/gofer/internal/event"
 	"github.com/Rememorio/gofer/internal/store"
 	"github.com/Rememorio/gofer/internal/usage"
+	"github.com/Rememorio/gofer/internal/workspacechange"
 )
 
 const maxRequestBytes = 1 << 20
@@ -161,6 +162,7 @@ func (handler *Handler) routes() {
 	handler.mux.HandleFunc("GET /api/threads/{thread_id}/runs/{run_id}", handler.getRun)
 	handler.mux.HandleFunc("POST /api/threads/{thread_id}/runs/{run_id}/cancel", handler.cancelRun)
 	handler.mux.HandleFunc("GET /api/threads/{thread_id}/runs/{run_id}/events", handler.listEvents)
+	handler.mux.HandleFunc("GET /api/threads/{thread_id}/runs/{run_id}/workspace-changes", handler.getWorkspaceChanges)
 	handler.mux.HandleFunc("GET /api/threads/{thread_id}/runs/{run_id}/stream", handler.streamEvents)
 	handler.mux.HandleFunc("POST /api/threads/{thread_id}/runs/{run_id}/stream", handler.postStreamEvents)
 	handler.mux.HandleFunc("GET /api/threads/{thread_id}/runs/{run_id}/join", handler.streamEvents)
@@ -444,6 +446,40 @@ func (handler *Handler) scopedRun(request *http.Request) (domain.Run, error) {
 		return domain.Run{}, store.ErrNotFound
 	}
 	return run, nil
+}
+
+func (handler *Handler) getWorkspaceChanges(writer http.ResponseWriter, request *http.Request) {
+	run, err := handler.scopedRun(request)
+	if err != nil {
+		writeError(writer, err)
+		return
+	}
+	includeFiles, err := optionalBool(request, "include_files", true)
+	if err == nil {
+		var includeDiff bool
+		includeDiff, err = optionalBool(request, "include_diff", true)
+		if err == nil {
+			var records []event.Event
+			records, err = handler.store.Events(request.Context(), run.ID, 0, 0)
+			if err == nil {
+				writeJSON(writer, http.StatusOK, workspacechange.ResponseFromEvents(records, includeFiles, includeDiff))
+				return
+			}
+		}
+	}
+	writeError(writer, err)
+}
+
+func optionalBool(request *http.Request, key string, fallback bool) (bool, error) {
+	raw := strings.TrimSpace(request.URL.Query().Get(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, store.ErrInvalidQuery
+	}
+	return value, nil
 }
 
 func eventRange(request *http.Request) (uint64, int, error) {

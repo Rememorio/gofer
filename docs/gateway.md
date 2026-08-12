@@ -47,6 +47,9 @@ store interface, so transport code does not own model or database behavior.
   attribution, message count, and stop reason. The thread token-usage endpoint
   aggregates completed runs by model and caller and can optionally include
   active progress.
+- `GET /api/threads/{thread_id}/runs/{run_id}/workspace-changes` returns the
+  latest journaled workspace/output review. `include_files=false` keeps only
+  the summary, while `include_diff=false` retains file metadata without text.
 
 The gateway reserves the `user_id` metadata key for its authenticated owner.
 It is never accepted from or returned to clients. Every thread, run, event,
@@ -84,6 +87,27 @@ survives restart without schema migration, and lets older events degrade to an
 `unknown` model bucket. Total tokens are input plus output; reasoning and cache
 figures remain detailed fields and are not double-counted. Branch history seed
 runs are marked synthetic and excluded.
+
+## Workspace change review
+
+The service captures a baseline before tools start. At finish it first cancels
+and drains outstanding child agents, then compares the current `workspace` and
+`outputs` roots and appends a `workspace_changes` event before the terminal run
+event. Uploads are immutable user input and are deliberately excluded. So are
+version-control/cache/build directories, browser frames, and externalized tool
+results that represent process feedback rather than deliverables.
+
+Review work is bounded to 2,000 scanned files, 200 returned changes, 256 KiB of
+text per file, and 1 MiB of total diff content. UTF-8 (with or without BOM) and
+BOM-marked UTF-16 receive unified diffs. Binary extensions or content,
+secret-looking paths, larger files, and symlinks expose only metadata and a
+reason; symlink targets are never followed. The summary still reports all
+changes seen inside the scan bound when file or diff details are truncated.
+
+The endpoint reads the immutable journal, so the same result survives restart
+under the in-memory, SQLite, and PostgreSQL adapters. Runs without changes—or
+legacy runs without a review event—return `available: false` with a stable
+versioned empty shape.
 
 The launch envelope supports input, command, assistant, metadata, config,
 context, checkpoint, interrupt, stream, disconnect, and multitask fields.

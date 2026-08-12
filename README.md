@@ -47,6 +47,10 @@ through the same authenticated thread boundary.
 Provider-reported token usage is journaled per model call and aggregated by
 thread, model, and caller. Main-agent, delegated subagent, and compaction calls
 share one exact, restart-safe accounting path with current-context estimates.
+Each run also records a bounded review of files changed below its workspace and
+outputs roots. Text receives a unified diff, while secret-looking, binary,
+large, and symlink paths remain metadata-only; uploads and transient process
+feedback are excluded.
 The `gofer serve` command now assembles the model provider, durable store,
 isolated workspaces, sandbox, browser, policy, runtime, gateway, graceful
 shutdown, and Prometheus endpoint into a runnable service. MCP tools, projected

@@ -17,6 +17,7 @@ import (
 	"github.com/Rememorio/gofer/internal/event"
 	"github.com/Rememorio/gofer/internal/model"
 	"github.com/Rememorio/gofer/internal/store"
+	"github.com/Rememorio/gofer/internal/workspacechange"
 )
 
 type lifecycle struct {
@@ -168,6 +169,76 @@ func TestCancelHealthAndErrors(t *testing.T) {
 	withoutCancel, _ := New(Config{Store: memory})
 	if response := perform(t, withoutCancel, http.MethodPost, base+"/cancel", `{}`, nil); response.Code != http.StatusNotImplemented {
 		t.Fatalf("not implemented=%d", response.Code)
+	}
+}
+
+func TestWorkspaceChangesReviewLifecycle(t *testing.T) {
+	t.Parallel()
+	memory := store.NewMemory()
+	thread, _ := domain.NewThread(time.Now())
+	if err := memory.CreateThread(context.Background(), thread); err != nil {
+		t.Fatal(err)
+	}
+	run, _ := domain.NewRun(thread.ID, time.Now())
+	if err := memory.CreateRun(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	result := workspacechange.Result{
+		Version: 1, Summary: workspacechange.Summary{Created: 1, Additions: 1}, Limits: workspacechange.DefaultLimits(),
+		Files: []workspacechange.FileChange{{Path: "/mnt/user-data/outputs/report.md", Status: workspacechange.StatusCreated, Diff: "+ready"}},
+	}
+	draft, _ := event.NewDraft(thread.ID, run.ID, event.WorkspaceChanges, time.Now(), workspacechange.NewEventPayload(result))
+	if _, err := memory.Append(context.Background(), run.ID, 0, draft); err != nil {
+		t.Fatal(err)
+	}
+	handler, _ := New(Config{Store: memory})
+	base := "/api/threads/" + string(thread.ID) + "/runs/" + string(run.ID) + "/workspace-changes"
+
+	response := perform(t, handler, http.MethodGet, base, "", nil)
+	var review workspacechange.Response
+	decodeResponse(t, response, &review)
+	if response.Code != http.StatusOK || !review.Available || len(review.Files) != 1 || review.Files[0].Diff != "+ready" {
+		t.Fatalf("review = %d %#v", response.Code, review)
+	}
+	withoutDiff := perform(t, handler, http.MethodGet, base+"?include_diff=false", "", nil)
+	decodeResponse(t, withoutDiff, &review)
+	if len(review.Files) != 1 || review.Files[0].Diff != "" {
+		t.Fatalf("without diff = %#v", review)
+	}
+	withoutFiles := perform(t, handler, http.MethodGet, base+"?include_files=false", "", nil)
+	decodeResponse(t, withoutFiles, &review)
+	if review.Files == nil || len(review.Files) != 0 {
+		t.Fatalf("without files = %#v", review)
+	}
+	if got := perform(t, handler, http.MethodGet, base+"?include_diff=bad", "", nil); got.Code != http.StatusBadRequest {
+		t.Fatalf("invalid query = %d", got.Code)
+	}
+}
+
+func TestWorkspaceChangesReviewHandlesEmptyScopeAndStoreErrors(t *testing.T) {
+	t.Parallel()
+	memory := store.NewMemory()
+	thread, _ := domain.NewThread(time.Now())
+	_ = memory.CreateThread(context.Background(), thread)
+	run, _ := domain.NewRun(thread.ID, time.Now())
+	_ = memory.CreateRun(context.Background(), run)
+	handler, _ := New(Config{Store: memory})
+	base := "/api/threads/" + string(thread.ID) + "/runs/" + string(run.ID) + "/workspace-changes"
+	empty := perform(t, handler, http.MethodGet, base, "", nil)
+	var review workspacechange.Response
+	decodeResponse(t, empty, &review)
+	if empty.Code != http.StatusOK || review.Available || review.Files == nil {
+		t.Fatalf("empty = %d %#v", empty.Code, review)
+	}
+	otherThread, _ := domain.NewThread(time.Now())
+	_ = memory.CreateThread(context.Background(), otherThread)
+	wrong := "/api/threads/" + string(otherThread.ID) + "/runs/" + string(run.ID) + "/workspace-changes"
+	if got := perform(t, handler, http.MethodGet, wrong, "", nil); got.Code != http.StatusNotFound {
+		t.Fatalf("wrong scope = %d", got.Code)
+	}
+	errorHandler, _ := New(Config{Store: eventErrorStore{Store: memory}})
+	if got := perform(t, errorHandler, http.MethodGet, base, "", nil); got.Code != http.StatusInternalServerError {
+		t.Fatalf("event error = %d", got.Code)
 	}
 }
 

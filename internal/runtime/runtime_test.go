@@ -63,6 +63,61 @@ func TestRunnerRecordsAuxiliaryModelUsage(t *testing.T) {
 	}
 }
 
+func TestRunnerRecordsFinishEventsBeforeTerminalEvent(t *testing.T) {
+	t.Parallel()
+	fixture := newFixture(t, [][]model.Chunk{{
+		{Kind: model.ChunkTextDelta, Text: "done"},
+		{Kind: model.ChunkDone, StopReason: model.StopEndTurn},
+	}}, nil)
+	var calls atomic.Int32
+	hook := FinishFunc(func(ctx context.Context, writer EventWriter) error {
+		calls.Add(1)
+		return writer.Append(ctx, event.WorkspaceChanges, map[string]string{"content": "changed"})
+	})
+	runner, err := NewRunner(RunnerConfig{Store: fixture.store, Provider: fixture.provider, FinishHooks: []FinishHook{hook}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.Run(context.Background(), fixture.request)
+	if err != nil || result.Run.Status != domain.RunSucceeded || calls.Load() != 1 {
+		t.Fatalf("Run() = %#v, %v, calls=%d", result, err, calls.Load())
+	}
+	assertEventKinds(t, fixture.store, fixture.run.ID, []event.Kind{
+		event.RunStarted, event.MessageStarted, event.MessageDelta, event.MessageCompleted,
+		event.WorkspaceChanges, event.RunCompleted,
+	})
+}
+
+func TestRunnerFailsOnceWhenFinishHookFails(t *testing.T) {
+	t.Parallel()
+	fixture := newFixture(t, [][]model.Chunk{{
+		{Kind: model.ChunkTextDelta, Text: "done"},
+		{Kind: model.ChunkDone, StopReason: model.StopEndTurn},
+	}}, nil)
+	var calls atomic.Int32
+	var laterCalled atomic.Bool
+	hookErr := errors.New("finish unavailable")
+	hook := FinishFunc(func(context.Context, EventWriter) error {
+		calls.Add(1)
+		return hookErr
+	})
+	later := FinishFunc(func(context.Context, EventWriter) error {
+		laterCalled.Store(true)
+		return nil
+	})
+	runner, err := NewRunner(RunnerConfig{Store: fixture.store, Provider: fixture.provider, FinishHooks: []FinishHook{hook, later}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.Run(context.Background(), fixture.request)
+	if !errors.Is(err, hookErr) || result.Run.Status != domain.RunFailed || calls.Load() != 1 || !laterCalled.Load() {
+		t.Fatalf("Run() = %#v, %v, calls=%d", result, err, calls.Load())
+	}
+	assertEventKinds(t, fixture.store, fixture.run.ID, []event.Kind{
+		event.RunStarted, event.MessageStarted, event.MessageDelta, event.MessageCompleted, event.RunFailed,
+	})
+}
+
 func TestRunnerExecutesToolLoop(t *testing.T) {
 	t.Parallel()
 
@@ -328,6 +383,9 @@ func TestRunnerRejectsInvalidConstructionAndRunState(t *testing.T) {
 	provider := &model.Scripted{}
 	if _, err := NewRunner(RunnerConfig{Store: memory, Provider: provider, MaxTurns: -1}); !errors.Is(err, ErrInvalidRunner) {
 		t.Fatalf("NewRunner(negative) error = %v, want ErrInvalidRunner", err)
+	}
+	if _, err := NewRunner(RunnerConfig{Store: memory, Provider: provider, FinishHooks: []FinishHook{nil}}); !errors.Is(err, ErrInvalidRunner) {
+		t.Fatalf("NewRunner(nil finish hook) error = %v", err)
 	}
 	invalidCaller := newFixture(t, nil, nil)
 	invalidCaller.request.Caller = "unknown"

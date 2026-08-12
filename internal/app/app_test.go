@@ -22,10 +22,12 @@ import (
 	"github.com/Rememorio/gofer/internal/auth"
 	"github.com/Rememorio/gofer/internal/config"
 	"github.com/Rememorio/gofer/internal/domain"
+	"github.com/Rememorio/gofer/internal/event"
 	"github.com/Rememorio/gofer/internal/gateway"
 	"github.com/Rememorio/gofer/internal/scheduler"
 	"github.com/Rememorio/gofer/internal/store"
 	"github.com/Rememorio/gofer/internal/workspace"
+	"github.com/Rememorio/gofer/internal/workspacechange"
 )
 
 func TestServiceRunsAgentThroughHTTP(t *testing.T) {
@@ -81,10 +83,11 @@ func TestServiceRunsAgentThroughHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = response.Body.Close() }()
-	var events []map[string]any
+	var events []event.Event
 	if err = json.NewDecoder(response.Body).Decode(&events); err != nil || len(events) < 8 {
 		t.Fatalf("events = %d, %v", len(events), err)
 	}
+	assertWorkspaceReview(t, server.URL, threadID, runID, events)
 	request, _ = http.NewRequestWithContext(context.Background(), http.MethodGet, server.URL+"/metrics", nil)
 	metrics, err := http.DefaultClient.Do(request)
 	if err != nil {
@@ -95,6 +98,34 @@ func TestServiceRunsAgentThroughHTTP(t *testing.T) {
 	if !bytes.Contains(metricsBody, []byte(`gofer_runs_total{status="succeeded"} 1`)) {
 		t.Fatalf("metrics = %s", metricsBody)
 	}
+}
+
+func assertWorkspaceReview(t *testing.T, serverURL string, threadID domain.ThreadID, runID domain.RunID, events []event.Event) {
+	t.Helper()
+	workspaceIndex, terminalIndex := -1, -1
+	for index, record := range events {
+		if record.Kind == event.WorkspaceChanges {
+			workspaceIndex = index
+		}
+		if record.Kind == event.RunCompleted {
+			terminalIndex = index
+		}
+	}
+	if workspaceIndex < 0 || terminalIndex < 0 || workspaceIndex >= terminalIndex {
+		t.Fatalf("workspace/terminal indexes = %d/%d", workspaceIndex, terminalIndex)
+	}
+	reviewRequest, _ := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		serverURL+"/api/threads/"+string(threadID)+"/runs/"+string(runID)+"/workspace-changes", nil)
+	reviewResponse, err := http.DefaultClient.Do(reviewRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var review workspacechange.Response
+	if err = json.NewDecoder(reviewResponse.Body).Decode(&review); err != nil || !review.Available ||
+		len(review.Files) != 1 || review.Files[0].Path != workspace.WorkspaceRoot+"/result.txt" {
+		t.Fatalf("workspace review = %#v, %v", review, err)
+	}
+	_ = reviewResponse.Body.Close()
 }
 
 func TestServiceContinuesConversationAcrossRuns(t *testing.T) {
