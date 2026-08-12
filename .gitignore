@@ -1,0 +1,8 @@
+/bin/
+/dist/
+/coverage.out
+/.gofer/
+/gofer
+.DS_Store
+.env
+config.yaml
