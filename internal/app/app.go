@@ -44,6 +44,7 @@ import (
 	"github.com/Rememorio/gofer/internal/subagent"
 	"github.com/Rememorio/gofer/internal/tool"
 	"github.com/Rememorio/gofer/internal/tool/builtin"
+	"github.com/Rememorio/gofer/internal/toolhistory"
 	"github.com/Rememorio/gofer/internal/tooloutput"
 	"github.com/Rememorio/gofer/internal/workspace"
 	"github.com/Rememorio/gofer/internal/workspacechange"
@@ -638,6 +639,13 @@ func (service *Service) runtimeMiddleware(threadID domain.ThreadID, provider con
 		}
 		middleware = append(middleware, loopGuard)
 	}
+	historyRepair, err := toolhistory.New(toolhistory.DefaultConfig())
+	if err != nil {
+		return nil, err
+	}
+	// Repair runs last so compaction and every temporary context contribution
+	// have already produced the exact transcript sent to the provider.
+	middleware = append(middleware, historyRepair)
 	return middleware, nil
 }
 

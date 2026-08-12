@@ -78,6 +78,10 @@ Repetitive tool loops are bounded independently of the overall turn budget.
 Gofer detects both equivalent call sets and excessive use of one tool, injects
 a temporary model-facing warning before the limit, and strips the limiting
 call set before execution with an explicit `loop_capped` terminal reason.
+Interrupted tool turns are repaired at the provider boundary. Missing results
+receive temporary recoverable errors, late results are restored beside their
+calls, and orphan results are omitted from that request, while the durable
+conversation remains an exact record of what actually happened.
 The `gofer serve` command now assembles the model provider, durable store,
 isolated workspaces, sandbox, browser, policy, runtime, gateway, graceful
 shutdown, and Prometheus endpoint into a runnable service. MCP tools, projected
@@ -120,6 +124,8 @@ File version gating is documented in
 [Read before write](docs/read-before-write.md).
 Repetitive-call safety is documented in
 [Tool loop detection](docs/loop-detection.md).
+Provider-safe interrupted transcripts are documented in
+[Tool history repair](docs/tool-history.md).
 
 ## Development
 

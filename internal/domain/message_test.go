@@ -70,6 +70,10 @@ func TestMessageValidateRejectsMalformedMessages(t *testing.T) {
 		{name: "bad tool call JSON", mutate: func(message *Message) {
 			message.Content[0] = Content{Kind: ContentToolCall, ToolCall: &ToolCall{ID: "1", Name: "x", Arguments: json.RawMessage(`{`)}}
 		}},
+		{name: "duplicate tool call ID", mutate: func(message *Message) {
+			call := &ToolCall{ID: "1", Name: "x", Arguments: json.RawMessage(`{}`)}
+			message.Content = []Content{{Kind: ContentToolCall, ToolCall: call}, {Kind: ContentToolCall, ToolCall: call}}
+		}},
 		{name: "missing tool result", mutate: func(message *Message) { message.Content[0] = Content{Kind: ContentToolResult} }},
 		{name: "bad tool result JSON", mutate: func(message *Message) {
 			message.Content[0] = Content{Kind: ContentToolResult, ToolResult: &ToolResult{CallID: "1", Output: json.RawMessage(`{`)}}

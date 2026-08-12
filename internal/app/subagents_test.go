@@ -18,6 +18,7 @@ import (
 	"github.com/Rememorio/gofer/internal/readbeforewrite"
 	"github.com/Rememorio/gofer/internal/runtime"
 	"github.com/Rememorio/gofer/internal/subagent"
+	"github.com/Rememorio/gofer/internal/toolhistory"
 	"github.com/Rememorio/gofer/internal/workspace"
 )
 
@@ -173,7 +174,7 @@ func TestChildExecutorSharesRunObservers(t *testing.T) {
 
 func assertFileGateOrdering(t *testing.T, middleware []runtime.Middleware) {
 	t.Helper()
-	compactorIndex, gateIndex, loopIndex := -1, -1, -1
+	compactorIndex, gateIndex, loopIndex, repairIndex := -1, -1, -1, -1
 	for index, candidate := range middleware {
 		switch candidate.(type) {
 		case *contextwindow.Compactor:
@@ -182,9 +183,11 @@ func assertFileGateOrdering(t *testing.T, middleware []runtime.Middleware) {
 			gateIndex = index
 		case *loopdetect.Middleware:
 			loopIndex = index
+		case *toolhistory.Middleware:
+			repairIndex = index
 		}
 	}
-	if compactorIndex < 0 || gateIndex <= compactorIndex || loopIndex <= gateIndex {
+	if compactorIndex < 0 || gateIndex <= compactorIndex || loopIndex <= gateIndex || repairIndex <= loopIndex {
 		t.Fatalf("runtime guards are out of order: %#v", middleware)
 	}
 }
@@ -218,6 +221,7 @@ func TestBuildToolsClosesChildrenOnAssemblyErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = children.Close() }()
+	repairSeen := false
 	for _, candidate := range middleware {
 		if _, ok := candidate.(*readbeforewrite.Middleware); ok {
 			t.Fatal("disabled read-before-write gate was assembled")
@@ -225,6 +229,12 @@ func TestBuildToolsClosesChildrenOnAssemblyErrors(t *testing.T) {
 		if _, ok := candidate.(*loopdetect.Middleware); ok {
 			t.Fatal("disabled loop detector was assembled")
 		}
+		if _, ok := candidate.(*toolhistory.Middleware); ok {
+			repairSeen = true
+		}
+	}
+	if !repairSeen {
+		t.Fatal("always-on tool history repair was not assembled")
 	}
 }
 

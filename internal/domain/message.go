@@ -98,10 +98,18 @@ func (message Message) Validate() error {
 	if len(message.Content) == 0 {
 		return fmt.Errorf("%w: content is required", ErrInvalidMessage)
 	}
+	callIDs := make(map[string]struct{})
 	for index, block := range message.Content {
 		if err := block.validate(); err != nil {
 			return fmt.Errorf("%w: content %d: %w", ErrInvalidMessage, index, err)
 		}
+		if block.Kind != ContentToolCall {
+			continue
+		}
+		if _, duplicate := callIDs[block.ToolCall.ID]; duplicate {
+			return fmt.Errorf("%w: duplicate tool call ID %q", ErrInvalidMessage, block.ToolCall.ID)
+		}
+		callIDs[block.ToolCall.ID] = struct{}{}
 	}
 	return nil
 }

@@ -44,6 +44,7 @@ Planned package groups:
 | `internal/tool` | Typed registry, validation, policy, and execution |
 | `internal/guardrail` | Temporary user-input framing and recursive untrusted-result neutralization |
 | `internal/loopdetect` | Bounded repeated-call and per-tool frequency detection |
+| `internal/toolhistory` | Transient provider-safe tool call/result transcript repair |
 | `internal/tooloutput` | Typed result synopsis, atomic spill storage, and context-budget fallback |
 | `internal/mcp` | MCP transports, bounded discovery, and namespaced tool adapters |
 | `internal/policy` | Ordered authorization rules and tool resource extraction |
@@ -92,3 +93,4 @@ Planned package groups:
 23. Remote-content results are sanitized before budgeting or persistence, and tool trust classification is explicit metadata rather than a name heuristic.
 24. Every existing-file mutation consumes a matching current read revision; same-scope, same-path checks and execution are serialized.
 25. Loop warnings are temporary model context; hard-capped tool calls never enter the journal or execute.
+26. Every provider-bound tool call has exactly one adjacent result; recovery never rewrites durable history.

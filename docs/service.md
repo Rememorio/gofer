@@ -59,6 +59,12 @@ Optional agent extensions are initialized before the listener becomes ready:
   calls before journaling or execution and completes the run with
   `stop_reason: loop_capped`. Per-tool frequency thresholds can override the
   global values.
+- Tool history repair is always active at the final model-request boundary. If
+  a cancelled or failed run persisted an assistant tool call without its
+  result, the next request receives a temporary recoverable error result in the
+  required position. Late results are regrouped by call ID, and orphan or
+  excess results are withheld from the provider. These corrections never alter
+  journal events or conversation APIs.
 - `subagent_spawn` starts bounded parallel child agents. Each child gets an
   isolated run journal and tool registry while sharing only the parent's
   policy-controlled workspace, configured extensions, and tenant scope. The
