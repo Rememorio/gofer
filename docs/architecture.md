@@ -36,6 +36,9 @@ Planned package groups:
 | `internal/thread` | Threads, messages, history, and checkpoints |
 | `internal/model` | Normalized model request, response, stream, and usage types |
 | `internal/tool` | Typed registry, validation, policy, and execution |
+| `internal/policy` | Ordered authorization rules and tool resource extraction |
+| `internal/workspace` | Per-thread files, uploads, outputs, search, and traversal safety |
+| `internal/artifact` | Explicit user-facing output registration and streaming |
 | `internal/sandbox` | Local and isolated execution contracts |
 | `internal/skill` | Skill discovery, validation, activation, and projection |
 | `internal/subagent` | Bounded parallel delegation and event fan-in |

@@ -12,8 +12,9 @@ one is written in Go.
 
 Gofer is under active development. The engineering foundation, durable core,
 normalized streaming model API, OpenAI-compatible adapter, validated tool
-registry, and event-journaled agent loop are in place. It is not yet a drop-in
-DeerFlow replacement.
+registry, event-journaled agent loop, traversal-resistant thread workspaces,
+artifact catalog, built-in file tools, and fail-closed policy middleware are in
+place. It is not yet a drop-in DeerFlow replacement.
 
 ## Design
 
