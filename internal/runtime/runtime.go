@@ -368,10 +368,32 @@ func (execution *execution) executeTools(ctx context.Context, outcomes []toolOut
 				outcomes[index].err = ctx.Err()
 				return
 			}
-			outcomes[index].result, outcomes[index].err = execution.runner.tools.Execute(ctx, outcomes[index].call)
+			outcomes[index].result, outcomes[index].err = execution.runner.executeTool(ctx, outcomes[index].call)
 		}(index)
 	}
 	wait.Wait()
+}
+
+func (runner *Runner) executeTool(ctx context.Context, call domain.ToolCall) (domain.ToolResult, error) {
+	execute := ToolExecutor(runner.tools.Execute)
+	for index := len(runner.middleware) - 1; index >= 0; index-- {
+		interceptor, ok := runner.middleware[index].(ToolExecutionInterceptor)
+		if !ok {
+			continue
+		}
+		next := execute
+		execute = func(ctx context.Context, call domain.ToolCall) (domain.ToolResult, error) {
+			return interceptor.ExecuteTool(ctx, call, next)
+		}
+	}
+	result, err := execute(ctx, call)
+	if err != nil {
+		return domain.ToolResult{}, err
+	}
+	if result.CallID != call.ID || len(result.Output) == 0 || !json.Valid(result.Output) {
+		return domain.ToolResult{}, fmt.Errorf("execute tool %s: %w: interceptor changed identity or JSON validity", call.Name, ErrProtocol)
+	}
+	return result, nil
 }
 
 func (execution *execution) persistToolOutcomes(ctx context.Context, outcomes []toolOutcome) ([]domain.Message, error) {

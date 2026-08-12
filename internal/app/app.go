@@ -33,6 +33,7 @@ import (
 	"github.com/Rememorio/gofer/internal/model/openaichat"
 	"github.com/Rememorio/gofer/internal/observe"
 	"github.com/Rememorio/gofer/internal/policy"
+	"github.com/Rememorio/gofer/internal/readbeforewrite"
 	"github.com/Rememorio/gofer/internal/runtime"
 	"github.com/Rememorio/gofer/internal/sandbox"
 	"github.com/Rememorio/gofer/internal/scheduler"
@@ -596,6 +597,15 @@ func (service *Service) runtimeMiddleware(threadID domain.ThreadID, provider con
 	if err != nil {
 		return nil, err
 	}
+	var fileGate *readbeforewrite.Middleware
+	if service.config.ReadBeforeWrite.Enabled {
+		fileGate, err = readbeforewrite.New(readbeforewrite.Config{
+			Scope: string(threadID), Files: threadWorkspace,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
 	middleware := []runtime.Middleware{policyMiddleware, guardrailMiddleware, budget}
 	if service.memories != nil {
 		memoryMiddleware, memoryErr := memory.NewMiddleware(memory.MiddlewareConfig{
@@ -616,7 +626,11 @@ func (service *Service) runtimeMiddleware(threadID domain.ThreadID, provider con
 	if err != nil {
 		return nil, err
 	}
-	return append(middleware, compactor), nil
+	middleware = append(middleware, compactor)
+	if fileGate != nil {
+		middleware = append(middleware, fileGate)
+	}
+	return middleware, nil
 }
 
 func toolOutputConfig(source config.ToolOutputConfig) tooloutput.Config {

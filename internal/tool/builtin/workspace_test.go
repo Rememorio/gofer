@@ -22,7 +22,7 @@ func TestWorkspaceToolsLifecycle(t *testing.T) {
 	defer func() { _ = thread.Close() }()
 	executeOK(t, registry, "write_file", `{"path":"/mnt/user-data/workspace/report.txt","content":"hello world\nsecond"}`)
 	read := executeOK(t, registry, "read_file", `{"path":"/mnt/user-data/workspace/report.txt","start_line":2}`)
-	if !containsJSON(read, `"content":"second"`) {
+	if !containsJSON(read, `"content":"second"`) || !containsJSON(read, `"revision":"sha256:`) {
 		t.Fatalf("read output = %s", read)
 	}
 	executeOK(t, registry, "str_replace", `{"path":"/mnt/user-data/workspace/report.txt","old_text":"hello","new_text":"hi"}`)

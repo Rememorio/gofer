@@ -10,7 +10,7 @@ module is committed and pushed separately.
 3. **Agent loop:** normalized model API, streaming, middleware, tool calls,
    input/result guardrails, budgets, cancellation, and deterministic replay.
 4. **Tools and extensions:** built-ins, MCP client integration, skills, file
-   workspace, artifacts, and policy enforcement.
+   workspace, read-before-write version gates, artifacts, and policy enforcement.
 5. **Execution:** local and container sandboxes with resource and path limits.
 6. **Coordination:** sub-agents, task limits, goals, todos, summarization, and
    long-term memory.

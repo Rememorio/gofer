@@ -15,6 +15,11 @@ runtime:
   min_recent_messages: 8
   max_summary_chars: 20000
 
+# Require the agent to read the current version of an existing file before
+# every write_file or str_replace operation. New files are unaffected.
+read_before_write:
+  enabled: true
+
 tool_output:
   enabled: true
   externalize_min_chars: 12000

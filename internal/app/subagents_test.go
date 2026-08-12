@@ -7,10 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Rememorio/gofer/internal/contextwindow"
 	"github.com/Rememorio/gofer/internal/delivery"
 	"github.com/Rememorio/gofer/internal/domain"
 	"github.com/Rememorio/gofer/internal/gateway"
 	"github.com/Rememorio/gofer/internal/model"
+	"github.com/Rememorio/gofer/internal/readbeforewrite"
 	"github.com/Rememorio/gofer/internal/runtime"
 	"github.com/Rememorio/gofer/internal/subagent"
 	"github.com/Rememorio/gofer/internal/workspace"
@@ -130,6 +132,23 @@ func TestChildExecutorSharesRunObservers(t *testing.T) {
 	if len(middleware) == 0 || middleware[len(middleware)-1] != tracker {
 		t.Fatalf("child middleware = %#v", middleware)
 	}
+	assertFileGateOrdering(t, middleware)
+}
+
+func assertFileGateOrdering(t *testing.T, middleware []runtime.Middleware) {
+	t.Helper()
+	compactorIndex, gateIndex := -1, -1
+	for index, candidate := range middleware {
+		switch candidate.(type) {
+		case *contextwindow.Compactor:
+			compactorIndex = index
+		case *readbeforewrite.Middleware:
+			gateIndex = index
+		}
+	}
+	if compactorIndex < 0 || gateIndex <= compactorIndex {
+		t.Fatalf("file gate must follow context compaction: %#v", middleware)
+	}
 }
 
 type testSubagentExecutor func(context.Context, subagent.Request) (subagent.Output, error)
@@ -154,6 +173,17 @@ func TestBuildToolsClosesChildrenOnAssemblyErrors(t *testing.T) {
 		t.Fatal("buildTools(invalid children) error = nil")
 	}
 	service.config.Runtime.MaxSubagents = maxSubagents
+	service.config.ReadBeforeWrite.Enabled = false
+	_, middleware, children, err := service.buildTools(threadWorkspace, launch, provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = children.Close() }()
+	for _, candidate := range middleware {
+		if _, ok := candidate.(*readbeforewrite.Middleware); ok {
+			t.Fatal("disabled read-before-write gate was assembled")
+		}
+	}
 }
 
 func subagentFixture(t *testing.T) (*Service, *workspace.Thread, gateway.StartRequest) {

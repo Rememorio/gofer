@@ -46,6 +46,7 @@ Planned package groups:
 | `internal/tooloutput` | Typed result synopsis, atomic spill storage, and context-budget fallback |
 | `internal/mcp` | MCP transports, bounded discovery, and namespaced tool adapters |
 | `internal/policy` | Ordered authorization rules and tool resource extraction |
+| `internal/readbeforewrite` | Version-aware existing-file mutation gate and same-path execution serialization |
 | `internal/workspace` | Per-thread files, uploads, outputs, search, and traversal safety |
 | `internal/workspacechange` | Bounded run snapshots, privacy-aware diffs, and journal projection |
 | `internal/artifact` | Explicit user-facing output registration and streaming |
@@ -88,3 +89,4 @@ Planned package groups:
 21. Raw tool-result observers run before context transforms; only the bounded transformed result enters the journal and later model requests.
 22. User text stays durable in its original form; every model call receives temporary authority-tag neutralization and explicit user boundaries.
 23. Remote-content results are sanitized before budgeting or persistence, and tool trust classification is explicit metadata rather than a name heuristic.
+24. Every existing-file mutation consumes a matching current read revision; same-scope, same-path checks and execution are serialized.

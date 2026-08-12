@@ -45,6 +45,13 @@ Optional agent extensions are initialized before the listener becomes ready:
   recursively neutralize the same tokens in JSON keys and string values before
   result budgeting and persistence. Local shell and file results are not
   rewritten.
+- `read_before_write.enabled` defaults to `true`. Existing workspace and output
+  files must be read at their current full-content revision before each
+  `write_file` or `str_replace`; ranged reads qualify because their result also
+  carries the complete file revision. New files pass through, stale marks
+  return a recoverable tool error, and same-path modifications are serialized
+  across lead and child agents. While this gate is enabled, configuration
+  validation requires `read_file` to remain exempt from tool-output budgeting.
 - `subagent_spawn` starts bounded parallel child agents. Each child gets an
   isolated run journal and tool registry while sharing only the parent's
   policy-controlled workspace, configured extensions, and tenant scope. The

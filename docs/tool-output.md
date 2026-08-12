@@ -9,6 +9,8 @@ tool result
     |
     +--> raw observers (artifact delivery facts)
     |
+    +--> remote-content guardrail (when classified as untrusted)
+    |
     +--> budget transform
             | small: unchanged
             | large: complete result -> .tool-results
@@ -61,4 +63,7 @@ exceeds the configured workspace output size, Gofer retains a head-and-tail
 sample whose total length never exceeds `fallback_max_chars`. Historical tool
 results from older runs receive the same fallback guard before model calls.
 The `read_file` exemption prevents a complete spilled result from being
-immediately externalized again when an agent inspects it.
+immediately externalized again when an agent inspects it. It also preserves the
+full-content revision used by the default read-before-write gate. Configuration
+validation therefore requires `read_file` in `exempt_tools` whenever both the
+budget and that gate are enabled.

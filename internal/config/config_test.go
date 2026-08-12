@@ -55,6 +55,9 @@ models:
 	if config.Runtime.MaxTurns != Defaults().Runtime.MaxTurns {
 		t.Fatalf("default runtime was not preserved: %#v", config.Runtime)
 	}
+	if !config.ReadBeforeWrite.Enabled {
+		t.Fatal("default read-before-write gate was not preserved")
+	}
 	if config.Sandbox.CommandTimeoutSeconds != 600 || config.Sandbox.NetworkEnabled {
 		t.Fatalf("default sandbox limits were not preserved: %#v", config.Sandbox)
 	}
@@ -64,6 +67,17 @@ models:
 	if !config.ToolOutput.Enabled || config.ToolOutput.ExternalizeMinChars != 12_000 ||
 		config.ToolOutput.StorageSubdir != ".tool-results" || len(config.ToolOutput.ExemptTools) != 2 {
 		t.Fatalf("default tool output budget was not preserved: %#v", config.ToolOutput)
+	}
+}
+
+func TestLoadCanDisableReadBeforeWrite(t *testing.T) {
+	t.Parallel()
+	config, err := Load(strings.NewReader("config_version: 1\nread_before_write:\n  enabled: false\nstorage:\n  driver: memory\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.ReadBeforeWrite.Enabled {
+		t.Fatal("read-before-write remained enabled")
 	}
 }
 
@@ -113,6 +127,7 @@ func TestValidateRejectsInvalidConfigurations(t *testing.T) {
 		{name: "tool output duplicate exemption", mutate: func(config *Config) { config.ToolOutput.ExemptTools = []string{"read", "read"} }},
 		{name: "tool output blank exemption", mutate: func(config *Config) { config.ToolOutput.ExemptTools = []string{" read"} }},
 		{name: "tool output invalid override", mutate: func(config *Config) { config.ToolOutput.ToolOverrides = map[string]int{"tool": -1} }},
+		{name: "read gate budgeted reads", mutate: func(config *Config) { config.ToolOutput.ExemptTools = []string{"read_file_tool"} }},
 		{name: "storage driver", mutate: func(config *Config) { config.Storage.Driver = "bad" }},
 		{name: "storage DSN", mutate: func(config *Config) { config.Storage.DSN = "" }},
 		{name: "workspace root", mutate: func(config *Config) { config.Workspace.Root = "" }},

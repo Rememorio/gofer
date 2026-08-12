@@ -31,6 +31,19 @@ type ToolResultTransformer interface {
 	TransformToolResult(context.Context, domain.ToolCall, domain.ToolResult) (domain.ToolResult, error)
 }
 
+// ToolExecutor invokes one tool call at the registry boundary. Execution
+// interceptors receive a next function so they can serialize, short-circuit,
+// or observe the actual operation without moving tool-specific policy into the
+// runtime.
+type ToolExecutor func(context.Context, domain.ToolCall) (domain.ToolResult, error)
+
+// ToolExecutionInterceptor optionally wraps actual tool execution. The first
+// registered interceptor is the outermost wrapper. An interceptor that
+// short-circuits must return a valid result with the original call ID.
+type ToolExecutionInterceptor interface {
+	ExecuteTool(context.Context, domain.ToolCall, ToolExecutor) (domain.ToolResult, error)
+}
+
 // NopMiddleware provides no-op implementations for selective embedding.
 type NopMiddleware struct{}
 

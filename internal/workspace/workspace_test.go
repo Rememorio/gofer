@@ -69,6 +69,53 @@ func TestWorkspaceFileLifecycle(t *testing.T) {
 	}
 }
 
+func TestWorkspaceFileRevisions(t *testing.T) {
+	t.Parallel()
+	thread := newTestWorkspace(t, Config{})
+	defer func() { _ = thread.Close() }()
+	file := WorkspaceRoot + "/revision.txt"
+	if err := thread.WriteFile(file, []byte("one\ntwo\n"), false); err != nil {
+		t.Fatal(err)
+	}
+	result, err := thread.ReadFile(file, ReadOptions{StartLine: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := contentRevision([]byte("one\ntwo\n"))
+	if result.Content != "two" || result.Revision != want {
+		t.Fatalf("ReadFile() = %#v, want revision %q", result, want)
+	}
+	if revision, revisionErr := thread.Revision(file); revisionErr != nil || revision != want {
+		t.Fatalf("Revision() = %q, %v", revision, revisionErr)
+	}
+	if err = thread.WriteFile(file, []byte("three\n"), true); err != nil {
+		t.Fatal(err)
+	}
+	if revision, revisionErr := thread.Revision(file); revisionErr != nil || revision == want {
+		t.Fatalf("changed Revision() = %q, %v", revision, revisionErr)
+	}
+}
+
+func TestWorkspaceRevisionRejectsUninspectableFiles(t *testing.T) {
+	t.Parallel()
+	thread := newTestWorkspace(t, Config{MaxReadBytes: 4, MaxWriteBytes: 8})
+	defer func() { _ = thread.Close() }()
+	large := WorkspaceRoot + "/large.txt"
+	if err := thread.WriteFile(large, []byte("12345"), false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := thread.Revision(large); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("Revision(large) error = %v", err)
+	}
+	binary := WorkspaceRoot + "/binary.dat"
+	if err := thread.WriteFile(binary, []byte{'a', 0, 'b'}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := thread.Revision(binary); !errors.Is(err, ErrNotRegular) {
+		t.Fatalf("Revision(binary) error = %v", err)
+	}
+}
+
 func TestWorkspaceRejectsUnsafeAndOversizedOperations(t *testing.T) {
 	t.Parallel()
 

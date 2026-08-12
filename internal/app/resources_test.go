@@ -58,9 +58,7 @@ func TestResourceDiscoveryAndSkillManagement(t *testing.T) {
 	}
 	resourceRequest[map[string]string](t, server.URL, http.MethodGet, "/api/models/missing", nil, "", http.StatusNotFound)
 	features := resourceRequest[map[string]map[string]bool](t, server.URL, http.MethodGet, "/api/features", nil, "", http.StatusOK)
-	if !features["skills"]["enabled"] || !features["memory"]["enabled"] || features["browser_control"]["enabled"] {
-		t.Fatalf("features = %#v", features)
-	}
+	assertResourceFeatures(t, features)
 	skills := resourceRequest[struct {
 		Skills []skill.Skill `json:"skills"`
 	}](t, server.URL, http.MethodGet, "/api/skills", nil, "", http.StatusOK)
@@ -98,6 +96,14 @@ func TestResourceDiscoveryAndSkillManagement(t *testing.T) {
 	}](t, server.URL, http.MethodGet, "/api/skills/demo", nil, "", http.StatusOK)
 	if !detail.Enabled {
 		t.Fatal("failed projection did not roll skill state back")
+	}
+}
+
+func assertResourceFeatures(t *testing.T, features map[string]map[string]bool) {
+	t.Helper()
+	if !features["skills"]["enabled"] || !features["memory"]["enabled"] ||
+		!features["read_before_write"]["enabled"] || features["browser_control"]["enabled"] {
+		t.Fatalf("features = %#v", features)
 	}
 }
 

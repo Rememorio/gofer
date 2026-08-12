@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -129,6 +130,7 @@ type ReadResult struct {
 	StartLine  int    `json:"start_line"`
 	EndLine    int    `json:"end_line"`
 	TotalLines int    `json:"total_lines"`
+	Revision   string `json:"revision"`
 }
 
 // ListOptions bounds recursive directory traversal.
@@ -464,7 +466,32 @@ func (workspace *Thread) ReadFile(virtualPath string, options ReadOptions) (Read
 	if bytes.IndexByte(data, 0) >= 0 {
 		return ReadResult{}, fmt.Errorf("%w: binary file", ErrNotRegular)
 	}
-	return selectLines(string(data), options), nil
+	result := selectLines(string(data), options)
+	result.Revision = contentRevision(data)
+	return result, nil
+}
+
+// Revision returns a stable digest of the complete bounded file contents.
+// It uses the same size boundary as ReadFile so a revision can represent only
+// content that the agent was able to inspect.
+func (workspace *Thread) Revision(virtualPath string) (string, error) {
+	reader, err := workspace.OpenFile(virtualPath)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = reader.Close() }()
+	data, err := readBounded(reader, workspace.maxReadBytes)
+	if err != nil {
+		return "", err
+	}
+	if bytes.IndexByte(data, 0) >= 0 {
+		return "", fmt.Errorf("%w: binary file", ErrNotRegular)
+	}
+	return contentRevision(data), nil
+}
+
+func contentRevision(data []byte) string {
+	return fmt.Sprintf("sha256:%x", sha256.Sum256(data))
 }
 
 // WriteFile writes or appends text under workspace or outputs.

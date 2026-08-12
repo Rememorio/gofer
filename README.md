@@ -68,6 +68,12 @@ forged user boundaries are neutralized without changing durable user text;
 browser snapshots and every MCP tool are classified as untrusted by tool
 metadata. Result sanitization runs before output budgeting, while local file
 and shell output remains byte-preserved.
+Existing files are protected by a version-aware read-before-write gate. A
+successful full or ranged `read_file` records the complete content revision;
+exactly one matching `write_file` or `str_replace` may follow before another
+read is required. Same-path writes are serialized across parent and child
+agents, so stale reads and concurrent duplicate appends fail with a
+model-correctable result instead of racing.
 The `gofer serve` command now assembles the model provider, durable store,
 isolated workspaces, sandbox, browser, policy, runtime, gateway, graceful
 shutdown, and Prometheus endpoint into a runnable service. MCP tools, projected
@@ -106,6 +112,8 @@ Tool result externalization and fallback behavior are documented in
 [Tool output budgets](docs/tool-output.md).
 Model-input trust boundaries are documented in
 [Prompt-injection guardrails](docs/guardrails.md).
+File version gating is documented in
+[Read before write](docs/read-before-write.md).
 
 ## Development
 

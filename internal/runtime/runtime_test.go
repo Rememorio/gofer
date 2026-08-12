@@ -276,6 +276,67 @@ func TestRunnerObservesRawResultThenPersistsTransformation(t *testing.T) {
 	}
 }
 
+func TestRunnerToolExecutionInterceptorsComposeAndShortCircuit(t *testing.T) {
+	t.Parallel()
+	events := make([]string, 0, 5)
+	registry := tool.NewRegistry()
+	if err := registry.Register(echoTool(func() { events = append(events, "tool") })); err != nil {
+		t.Fatal(err)
+	}
+	outer := &executionInterceptor{name: "outer", events: &events}
+	inner := &executionInterceptor{name: "inner", events: &events}
+	runner := &Runner{tools: registry, middleware: []Middleware{outer, inner}}
+	call := domain.ToolCall{ID: "call", Name: "echo", Arguments: json.RawMessage(`{"text":"hello"}`)}
+	result, err := runner.executeTool(context.Background(), call)
+	if err != nil || string(result.Output) != `{"text":"hello"}` {
+		t.Fatalf("executeTool() = %#v, %v", result, err)
+	}
+	want := []string{"outer:before", "inner:before", "tool", "inner:after", "outer:after"}
+	if !equalStrings(events, want) {
+		t.Fatalf("events = %#v, want %#v", events, want)
+	}
+
+	events = nil
+	outer.shortCircuit = true
+	result, err = runner.executeTool(context.Background(), call)
+	if err != nil || !result.IsError || string(result.Output) != `{"blocked":true}` {
+		t.Fatalf("short circuit = %#v, %v", result, err)
+	}
+	if !equalStrings(events, []string{"outer:before"}) {
+		t.Fatalf("short-circuit events = %#v", events)
+	}
+}
+
+func TestRunnerRejectsInvalidToolInterceptorResults(t *testing.T) {
+	t.Parallel()
+	registry := tool.NewRegistry()
+	if err := registry.Register(echoTool(nil)); err != nil {
+		t.Fatal(err)
+	}
+	call := domain.ToolCall{ID: "call", Name: "echo", Arguments: json.RawMessage(`{"text":"hello"}`)}
+	tests := []struct {
+		name   string
+		result domain.ToolResult
+		err    error
+		want   error
+	}{
+		{name: "identity", result: domain.ToolResult{CallID: "other", Output: json.RawMessage(`{}`)}, want: ErrProtocol},
+		{name: "empty output", result: domain.ToolResult{CallID: "call"}, want: ErrProtocol},
+		{name: "invalid output", result: domain.ToolResult{CallID: "call", Output: json.RawMessage(`no`)}, want: ErrProtocol},
+		{name: "error", err: errInterceptorFailure, want: errInterceptorFailure},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			middleware := &fixedExecutionInterceptor{result: test.result, err: test.err}
+			runner := &Runner{tools: registry, middleware: []Middleware{middleware}}
+			_, err := runner.executeTool(context.Background(), call)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("executeTool() error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
 func TestRunnerFailsBeforeToolPersistenceOnResultBoundaryError(t *testing.T) {
 	t.Parallel()
 	registry := tool.NewRegistry()
@@ -609,6 +670,35 @@ type resultBoundaryMiddleware struct {
 	after          string
 	fail           string
 	mutateObserved bool
+}
+
+type executionInterceptor struct {
+	NopMiddleware
+	name         string
+	events       *[]string
+	shortCircuit bool
+}
+
+func (interceptor *executionInterceptor) ExecuteTool(ctx context.Context, call domain.ToolCall, next ToolExecutor) (domain.ToolResult, error) {
+	*interceptor.events = append(*interceptor.events, interceptor.name+":before")
+	if interceptor.shortCircuit {
+		return domain.ToolResult{CallID: call.ID, Output: json.RawMessage(`{"blocked":true}`), IsError: true}, nil
+	}
+	result, err := next(ctx, call)
+	*interceptor.events = append(*interceptor.events, interceptor.name+":after")
+	return result, err
+}
+
+var errInterceptorFailure = errors.New("interceptor failure marker")
+
+type fixedExecutionInterceptor struct {
+	NopMiddleware
+	result domain.ToolResult
+	err    error
+}
+
+func (interceptor *fixedExecutionInterceptor) ExecuteTool(context.Context, domain.ToolCall, ToolExecutor) (domain.ToolResult, error) {
+	return interceptor.result, interceptor.err
 }
 
 func (middleware *resultBoundaryMiddleware) ObserveToolResult(_ context.Context, _ domain.ToolCall, result domain.ToolResult) error {

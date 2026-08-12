@@ -24,22 +24,29 @@ var (
 
 // Config is Gofer's versioned root configuration.
 type Config struct {
-	Version    int              `yaml:"config_version" json:"config_version"`
-	LogLevel   string           `yaml:"log_level" json:"log_level"`
-	Server     ServerConfig     `yaml:"server" json:"server"`
-	Runtime    RuntimeConfig    `yaml:"runtime" json:"runtime"`
-	ToolOutput ToolOutputConfig `yaml:"tool_output" json:"tool_output"`
-	Storage    StorageConfig    `yaml:"storage" json:"storage"`
-	Workspace  WorkspaceConfig  `yaml:"workspace" json:"workspace"`
-	Sandbox    SandboxConfig    `yaml:"sandbox" json:"sandbox"`
-	Browser    BrowserConfig    `yaml:"browser" json:"browser"`
-	Skills     SkillsConfig     `yaml:"skills" json:"skills"`
-	MCP        MCPConfig        `yaml:"mcp" json:"mcp"`
-	Memory     MemoryConfig     `yaml:"memory" json:"memory"`
-	Auth       AuthConfig       `yaml:"auth" json:"auth"`
-	Scheduler  SchedulerConfig  `yaml:"scheduler" json:"scheduler"`
-	Channels   ChannelsConfig   `yaml:"channels" json:"channels"`
-	Models     []ModelConfig    `yaml:"models" json:"models"`
+	Version         int                   `yaml:"config_version" json:"config_version"`
+	LogLevel        string                `yaml:"log_level" json:"log_level"`
+	Server          ServerConfig          `yaml:"server" json:"server"`
+	Runtime         RuntimeConfig         `yaml:"runtime" json:"runtime"`
+	ReadBeforeWrite ReadBeforeWriteConfig `yaml:"read_before_write" json:"read_before_write"`
+	ToolOutput      ToolOutputConfig      `yaml:"tool_output" json:"tool_output"`
+	Storage         StorageConfig         `yaml:"storage" json:"storage"`
+	Workspace       WorkspaceConfig       `yaml:"workspace" json:"workspace"`
+	Sandbox         SandboxConfig         `yaml:"sandbox" json:"sandbox"`
+	Browser         BrowserConfig         `yaml:"browser" json:"browser"`
+	Skills          SkillsConfig          `yaml:"skills" json:"skills"`
+	MCP             MCPConfig             `yaml:"mcp" json:"mcp"`
+	Memory          MemoryConfig          `yaml:"memory" json:"memory"`
+	Auth            AuthConfig            `yaml:"auth" json:"auth"`
+	Scheduler       SchedulerConfig       `yaml:"scheduler" json:"scheduler"`
+	Channels        ChannelsConfig        `yaml:"channels" json:"channels"`
+	Models          []ModelConfig         `yaml:"models" json:"models"`
+}
+
+// ReadBeforeWriteConfig controls the version gate for modifying existing
+// workspace and output files.
+type ReadBeforeWriteConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
 }
 
 // ServerConfig controls the HTTP gateway listener.
@@ -224,6 +231,7 @@ func Defaults() Config {
 			MinRecentMessages: 8,
 			MaxSummaryChars:   20_000,
 		},
+		ReadBeforeWrite: ReadBeforeWriteConfig{Enabled: true},
 		ToolOutput: ToolOutputConfig{
 			Enabled: true, ExternalizeMinChars: 12_000,
 			PreviewHeadChars: 2_000, PreviewTailChars: 1_000,
@@ -316,6 +324,9 @@ func (config Config) Validate() error {
 	if err := validateToolOutput(config.ToolOutput); err != nil {
 		return err
 	}
+	if config.ReadBeforeWrite.Enabled && config.ToolOutput.Enabled && !contains(config.ToolOutput.ExemptTools, "read_file") {
+		return fmt.Errorf("%w: read_file must be exempt from tool output budgeting when read_before_write is enabled", ErrInvalid)
+	}
 	if err := validateBrowser(config.Browser); err != nil {
 		return err
 	}
@@ -326,6 +337,15 @@ func (config Config) Validate() error {
 		return err
 	}
 	return validateModels(config.Models)
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func validateServices(auth AuthConfig, scheduler SchedulerConfig, channels ChannelsConfig) error {
