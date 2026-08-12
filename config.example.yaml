@@ -1,0 +1,24 @@
+config_version: 1
+log_level: info
+
+server:
+  address: 127.0.0.1:8001
+
+runtime:
+  max_turns: 100
+  max_parallel_tools: 8
+  max_subagents: 8
+  event_buffer: 128
+
+storage:
+  driver: sqlite
+  dsn: .gofer/gofer.db
+
+sandbox:
+  driver: local
+
+models:
+  - name: primary
+    provider: openai
+    model: gpt-5
+    api_key: $OPENAI_API_KEY
