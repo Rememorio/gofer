@@ -1,0 +1,433 @@
+package app
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/Rememorio/gofer/internal/config"
+	"github.com/Rememorio/gofer/internal/domain"
+	"github.com/Rememorio/gofer/internal/gateway"
+	"github.com/Rememorio/gofer/internal/store"
+)
+
+func TestServiceRunsAgentThroughHTTP(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	modelServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("path = %q", request.URL.Path)
+		}
+		body, _ := io.ReadAll(request.Body)
+		if !bytes.Contains(body, []byte(`"model":"gpt-test"`)) {
+			t.Errorf("model request = %s", body)
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		if calls.Add(1) == 1 {
+			writeSSE(writer,
+				`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"write-1","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"/mnt/user-data/workspace/result.txt\",\"content\":\"made by gofer\"}"}}]},"finish_reason":null}]}`,
+				`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+			)
+			return
+		}
+		writeSSE(writer,
+			`{"id":"c2","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"done"},"finish_reason":null}]}`,
+			`{"id":"c2","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`{"id":"c2","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}`,
+		)
+	}))
+	defer modelServer.Close()
+
+	cfg := testConfig(t, modelServer.URL+"/v1")
+	service, err := New(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = service.Close() }()
+	server := httptest.NewServer(service.Handler())
+	defer server.Close()
+
+	threadID := createThread(t, server.URL, "")
+	runID := createRun(t, server.URL, threadID, `{"assistant_id":"primary","input":{"messages":[{"role":"user","content":"make a file"}]},"context":{"max_tokens":200,"temperature":0.2}}`, "")
+	run := waitRun(t, server.URL, threadID, runID, domain.RunSucceeded, "")
+	if run.Error != "" || calls.Load() != 2 {
+		t.Fatalf("run/calls = %#v/%d", run, calls.Load())
+	}
+	path := filepath.Join(cfg.Workspace.Root, "threads", string(threadID), "user-data", "workspace", "result.txt")
+	content, err := os.ReadFile(path)
+	if err != nil || string(content) != "made by gofer" {
+		t.Fatalf("workspace file = %q, %v", content, err)
+	}
+	request, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, server.URL+"/api/threads/"+string(threadID)+"/runs/"+string(runID)+"/events", nil)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	var events []map[string]any
+	if err = json.NewDecoder(response.Body).Decode(&events); err != nil || len(events) < 8 {
+		t.Fatalf("events = %d, %v", len(events), err)
+	}
+	request, _ = http.NewRequestWithContext(context.Background(), http.MethodGet, server.URL+"/metrics", nil)
+	metrics, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metricsBody, _ := io.ReadAll(metrics.Body)
+	_ = metrics.Body.Close()
+	if !bytes.Contains(metricsBody, []byte(`gofer_runs_total{status="succeeded"} 1`)) {
+		t.Fatalf("metrics = %s", metricsBody)
+	}
+}
+
+func TestServicePersistsInvalidLaunchAsFailed(t *testing.T) {
+	t.Parallel()
+	modelServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("model server should not be called")
+	}))
+	defer modelServer.Close()
+	service, err := New(context.Background(), testConfig(t, modelServer.URL+"/v1"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = service.Close() }()
+	server := httptest.NewServer(service.Handler())
+	defer server.Close()
+	threadID := createThread(t, server.URL, "")
+	runID := createRun(t, server.URL, threadID, `{"assistant_id":"missing","input":{"messages":[{"role":"user","content":"hello"}]}}`, "")
+	run := waitRun(t, server.URL, threadID, runID, domain.RunFailed, "")
+	if !strings.Contains(run.Error, "model alias") {
+		t.Fatalf("run error = %q", run.Error)
+	}
+	invalidID := createRun(t, server.URL, threadID, `{"input":{"messages":[]}}`, "")
+	invalid := waitRun(t, server.URL, threadID, invalidID, domain.RunFailed, "")
+	if !strings.Contains(invalid.Error, "messages are required") {
+		t.Fatalf("invalid error = %q", invalid.Error)
+	}
+}
+
+func TestServiceCancellationAndAuthentication(t *testing.T) {
+	t.Parallel()
+	requestStarted := make(chan struct{})
+	modelServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writer.WriteHeader(http.StatusOK)
+		if flusher, ok := writer.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		close(requestStarted)
+		<-request.Context().Done()
+	}))
+	defer modelServer.Close()
+	cfg := testConfig(t, modelServer.URL+"/v1")
+	token := strings.Repeat("s", 24)
+	cfg.Auth = config.AuthConfig{Enabled: true, Tokens: []config.AuthTokenConfig{{Secret: token, PrincipalID: "tester", Permissions: []string{"admin"}}}}
+	service, err := New(context.Background(), cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = service.Close() }()
+	server := httptest.NewServer(service.Handler())
+	defer server.Close()
+	unauthorizedRequest, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL+"/api/threads", strings.NewReader(`{}`))
+	unauthorizedRequest.Header.Set("Content-Type", "application/json")
+	if response, err := http.DefaultClient.Do(unauthorizedRequest); err != nil || response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthorized = %#v, %v", response, err)
+	} else {
+		_ = response.Body.Close()
+	}
+	authorization := "Bearer " + token
+	threadID := createThread(t, server.URL, authorization)
+	runID := createRun(t, server.URL, threadID, `{"input":{"messages":[{"role":"user","content":"wait"}]}}`, authorization)
+	select {
+	case <-requestStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("model request did not start")
+	}
+	request, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL+"/api/threads/"+string(threadID)+"/runs/"+string(runID)+"/cancel", strings.NewReader(`{}`))
+	request.Header.Set("Authorization", authorization)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("cancel status = %d", response.StatusCode)
+	}
+	waitRun(t, server.URL, threadID, runID, domain.RunCancelled, authorization)
+}
+
+func TestServiceImmediateCancellationSettlesPendingRun(t *testing.T) {
+	t.Parallel()
+	modelServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writer.WriteHeader(http.StatusOK)
+		if flusher, ok := writer.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		<-request.Context().Done()
+	}))
+	defer modelServer.Close()
+	service, err := New(context.Background(), testConfig(t, modelServer.URL+"/v1"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = service.Close() }()
+	thread, _ := domain.NewThread(time.Now())
+	if err = service.store.CreateThread(context.Background(), thread); err != nil {
+		t.Fatal(err)
+	}
+	run, _ := domain.NewRun(thread.ID, time.Now())
+	if err = service.store.CreateRun(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	launch := gateway.StartRequest{RunID: run.ID, ThreadID: thread.ID, Request: gateway.RunRequest{Input: json.RawMessage(`{"messages":[{"role":"user","content":"wait"}]}`)}}
+	if err = service.Start(context.Background(), launch); err != nil {
+		t.Fatal(err)
+	}
+	if err = service.Cancel(context.Background(), run.ID); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		current, lookupErr := service.store.Run(context.Background(), run.ID)
+		if lookupErr != nil {
+			t.Fatal(lookupErr)
+		}
+		if current.Status == domain.RunCancelled {
+			if err = service.Cancel(context.Background(), run.ID); !errors.Is(err, store.ErrConflict) {
+				t.Fatalf("Cancel(terminal) error = %v", err)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("run remained pending after immediate cancellation")
+}
+
+func TestServiceConstructionAndHelpers(t *testing.T) {
+	t.Parallel()
+	var nilContext context.Context
+	if _, err := New(nilContext, config.Defaults(), nil); err == nil {
+		t.Fatal("New(nil) error = nil")
+	}
+	invalid := config.Defaults()
+	invalid.Version = 2
+	if _, err := New(context.Background(), invalid, nil); err == nil {
+		t.Fatal("New(invalid) error = nil")
+	}
+	noModels := config.Defaults()
+	noModels.Storage.Driver = "memory"
+	noModels.Workspace.Root = t.TempDir()
+	if _, err := New(context.Background(), noModels, nil); err == nil {
+		t.Fatal("New(no models) error = nil")
+	}
+	unsupported := noModels
+	unsupported.Models = []config.ModelConfig{{Name: "x", Provider: "other", Model: "x"}}
+	if _, err := New(context.Background(), unsupported, nil); err == nil {
+		t.Fatal("New(unsupported provider) error = nil")
+	}
+	if err := prepareSQLitePath(":memory:"); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareSQLitePath("file:memory?mode=memory"); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareSQLitePath("plain.db"); err != nil {
+		t.Fatal(err)
+	}
+	databasePath := filepath.Join(t.TempDir(), "nested", "gofer.db")
+	opened, closer, err := openStore(context.Background(), config.StorageConfig{Driver: "sqlite", DSN: databasePath})
+	if err != nil || opened == nil || closer == nil {
+		t.Fatalf("openStore() = %#v, %#v, %v", opened, closer, err)
+	}
+	_ = closer.Close()
+	if _, _, err = openStore(context.Background(), config.StorageConfig{Driver: "bad", DSN: "x"}); err == nil {
+		t.Fatal("openStore(bad) error = nil")
+	}
+	var nilService *Service
+	if err = nilService.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServiceAssemblesBrowserAndDockerTools(t *testing.T) {
+	t.Parallel()
+	modelServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer modelServer.Close()
+	cfg := testConfig(t, modelServer.URL+"/v1")
+	cfg.Browser.Enabled = true
+	cfg.Browser.AllowPrivateAddresses = true
+	cfg.Sandbox.Driver = "docker"
+	cfg.Sandbox.Image = "alpine:latest"
+	service, err := New(context.Background(), cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	thread, err := domain.NewThread(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadWorkspace, err := service.workspaces.Open(thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = threadWorkspace.Close() }()
+	run, _ := domain.NewRun(thread.ID, time.Now())
+	registry, middleware, err := service.buildTools(threadWorkspace, gateway.StartRequest{RunID: run.ID, ThreadID: thread.ID})
+	if err != nil || len(registry.Definitions()) < 20 || len(middleware) != 1 {
+		t.Fatalf("buildTools() = %d, %d, %v", len(registry.Definitions()), len(middleware), err)
+	}
+	if err = service.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = service.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	badBrowser := testConfig(t, modelServer.URL+"/v1")
+	badBrowser.Browser.Enabled = true
+	badBrowser.Browser.RemoteURL = "not-a-url"
+	if _, err = New(context.Background(), badBrowser, nil); err == nil {
+		t.Fatal("New(bad browser) error = nil")
+	}
+	remote := testConfig(t, modelServer.URL+"/v1")
+	remote.Sandbox.Driver = "remote"
+	remoteService, err := New(context.Background(), remote, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteWorkspace, _ := remoteService.workspaces.Open(thread.ID)
+	if _, err = remoteService.commandExecutor(remoteWorkspace); err == nil {
+		t.Fatal("commandExecutor(remote) error = nil")
+	}
+	_ = remoteWorkspace.Close()
+	_ = remoteService.Close()
+}
+
+func TestServeStopsWithContext(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "config.yaml")
+	raw := fmt.Sprintf("config_version: 1\nserver:\n  address: 127.0.0.1:0\nstorage:\n  driver: memory\nworkspace:\n  root: %q\nmodels:\n  - name: primary\n    provider: openai\n    model: test\n    api_key: test\n", filepath.Join(directory, "workspaces"))
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	if err := Serve(ctx, configPath, io.Discard); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Serve() error = %v", err)
+	}
+}
+
+func testConfig(t *testing.T, baseURL string) config.Config {
+	t.Helper()
+	cfg := config.Defaults()
+	cfg.Storage = config.StorageConfig{Driver: "memory"}
+	cfg.Workspace.Root = t.TempDir()
+	cfg.Sandbox.AllowHostExecution = false
+	cfg.Models = []config.ModelConfig{{Name: "primary", Provider: "openai", Model: "gpt-test", APIKey: "test", BaseURL: baseURL}}
+	return cfg
+}
+
+func writeSSE(writer http.ResponseWriter, chunks ...string) {
+	for _, chunk := range chunks {
+		_, _ = fmt.Fprintf(writer, "data: %s\n\n", chunk)
+	}
+	_, _ = io.WriteString(writer, "data: [DONE]\n\n")
+}
+
+func createThread(t *testing.T, baseURL, authorization string) domain.ThreadID {
+	t.Helper()
+	request, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, baseURL+"/api/threads", strings.NewReader(`{"title":"test"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", authorization)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("create thread status = %d", response.StatusCode)
+	}
+	var value struct {
+		ThreadID domain.ThreadID `json:"thread_id"`
+	}
+	if err = json.NewDecoder(response.Body).Decode(&value); err != nil {
+		t.Fatal(err)
+	}
+	return value.ThreadID
+}
+
+func createRun(t *testing.T, baseURL string, threadID domain.ThreadID, body, authorization string) domain.RunID {
+	t.Helper()
+	request, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, baseURL+"/api/threads/"+string(threadID)+"/runs", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", authorization)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusCreated {
+		payload, _ := io.ReadAll(response.Body)
+		t.Fatalf("create run status = %d: %s", response.StatusCode, payload)
+	}
+	var value struct {
+		RunID domain.RunID `json:"run_id"`
+	}
+	if err = json.NewDecoder(response.Body).Decode(&value); err != nil {
+		t.Fatal(err)
+	}
+	return value.RunID
+}
+
+func waitRun(t *testing.T, baseURL string, threadID domain.ThreadID, runID domain.RunID, want domain.RunStatus, authorization string) domain.Run {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		request, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, baseURL+"/api/threads/"+string(threadID)+"/runs/"+string(runID), nil)
+		request.Header.Set("Authorization", authorization)
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var run domain.Run
+		err = json.NewDecoder(response.Body).Decode(&run)
+		_ = response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		status := run.Status
+		if status == "success" {
+			status = domain.RunSucceeded
+		} else if status == "error" {
+			status = domain.RunFailed
+		}
+		if status == want {
+			run.Status = status
+			return run
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("run %s did not reach %s", runID, want)
+	return domain.Run{}
+}
+
+var _ gateway.RunStarter = (*Service)(nil)
+var _ gateway.RunCanceller = (*Service)(nil)

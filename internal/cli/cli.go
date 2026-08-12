@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/Rememorio/gofer/internal/app"
 	"github.com/Rememorio/gofer/internal/buildinfo"
 )
 
@@ -16,6 +17,7 @@ Usage:
   gofer [command]
 
 Commands:
+  serve          Start the Gofer HTTP service
   version        Print build information
   help           Show this help
 
@@ -26,6 +28,16 @@ Options:
 
 // Run executes the command-line interface and returns a process exit code.
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	return RunWithServices(ctx, args, stdout, stderr, Services{Serve: app.Serve})
+}
+
+// Services supplies process-level operations for testable command dispatch.
+type Services struct {
+	Serve func(context.Context, string, io.Writer) error
+}
+
+// RunWithServices executes the CLI with explicit process services.
+func RunWithServices(ctx context.Context, args []string, stdout, stderr io.Writer, services Services) int {
 	if err := ctx.Err(); err != nil {
 		fmt.Fprintf(stderr, "gofer: %v\n", err)
 		return 1
@@ -42,10 +54,31 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "version", "-v", "--version":
 		return runVersion(args[1:], stdout, stderr)
+	case "serve":
+		return runServe(ctx, args[1:], stdout, stderr, services.Serve)
 	default:
 		fmt.Fprintf(stderr, "gofer: unknown command %q\n", args[0])
 		return 2
 	}
+}
+
+func runServe(ctx context.Context, args []string, stdout, stderr io.Writer, serve func(context.Context, string, io.Writer) error) int {
+	path := "config.yaml"
+	if len(args) == 2 && args[0] == "--config" && args[1] != "" {
+		path = args[1]
+	} else if len(args) != 0 {
+		fmt.Fprintln(stderr, "gofer: usage: gofer serve [--config FILE]")
+		return 2
+	}
+	if serve == nil {
+		fmt.Fprintln(stderr, "gofer: serve service is unavailable")
+		return 1
+	}
+	if err := serve(ctx, path, stdout); err != nil && !errors.Is(err, context.Canceled) {
+		fmt.Fprintf(stderr, "gofer: serve: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func runVersion(args []string, stdout, stderr io.Writer) int {

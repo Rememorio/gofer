@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -119,6 +120,29 @@ func TestRunVersionRejectsArguments(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "usage") {
 		t.Fatalf("Run() stderr = %q, want usage", stderr.String())
+	}
+}
+
+func TestRunServe(t *testing.T) {
+	t.Parallel()
+	called := false
+	var stdout, stderr bytes.Buffer
+	code := RunWithServices(context.Background(), []string{"serve", "--config", "custom.yaml"}, &stdout, &stderr, Services{Serve: func(_ context.Context, path string, output io.Writer) error {
+		called = path == "custom.yaml" && output == &stdout
+		return nil
+	}})
+	if code != 0 || !called || stderr.Len() != 0 {
+		t.Fatalf("RunWithServices() = %d, %v, %q", code, called, stderr.String())
+	}
+	if code = RunWithServices(context.Background(), []string{"serve", "bad"}, &stdout, &stderr, Services{}); !IsUsageError(code) {
+		t.Fatalf("bad serve code = %d", code)
+	}
+	if code = RunWithServices(context.Background(), []string{"serve"}, &stdout, &stderr, Services{}); code != 1 {
+		t.Fatalf("missing service code = %d", code)
+	}
+	code = RunWithServices(context.Background(), []string{"serve"}, &stdout, &stderr, Services{Serve: func(context.Context, string, io.Writer) error { return errors.New("failed") }})
+	if code != 1 || !strings.Contains(stderr.String(), "failed") {
+		t.Fatalf("failed service = %d, %q", code, stderr.String())
 	}
 }
 

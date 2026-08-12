@@ -27,7 +27,9 @@ hierarchically scoped memory recall, safe conversation compaction, and bounded
 parallel child agents with ordered lifecycle events.
 The durable service boundary now includes DeerFlow-shaped thread and run
 responses, resumable run-event SSE, and transactional SQLite/PostgreSQL stores.
-Service control primitives include digest-only bearer credentials and RBAC,
+The `gofer serve` command now assembles the model provider, durable store,
+isolated workspaces, sandbox, browser, policy, runtime, gateway, graceful
+shutdown, and Prometheus endpoint into a runnable service. Service control primitives include digest-only bearer credentials and RBAC,
 leased cron/one-shot scheduling, authenticated channel normalization,
 dependency-ordered extensions, and bounded-cardinality Prometheus metrics.
 
@@ -61,6 +63,8 @@ Gofer requires Go 1.26 or newer.
 
 ```sh
 go run . version
+cp config.example.yaml config.yaml
+OPENAI_API_KEY=... go run . serve --config config.yaml
 make verify
 make lint
 make race
@@ -70,6 +74,9 @@ The CI gate enforces formatting, `go doc` rendering, exported API comments,
 static analysis, cognitive and cyclomatic complexity limits, at least 85%
 internal-package test coverage, race detection, vulnerability scanning, shell
 and workflow linting, and CGO-free cross-platform builds.
+
+See [Running Gofer](docs/service.md) for the launch request and operational
+endpoints.
 
 ## License
 

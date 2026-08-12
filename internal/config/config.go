@@ -29,6 +29,7 @@ type Config struct {
 	Server    ServerConfig    `yaml:"server" json:"server"`
 	Runtime   RuntimeConfig   `yaml:"runtime" json:"runtime"`
 	Storage   StorageConfig   `yaml:"storage" json:"storage"`
+	Workspace WorkspaceConfig `yaml:"workspace" json:"workspace"`
 	Sandbox   SandboxConfig   `yaml:"sandbox" json:"sandbox"`
 	Browser   BrowserConfig   `yaml:"browser" json:"browser"`
 	Auth      AuthConfig      `yaml:"auth" json:"auth"`
@@ -54,6 +55,14 @@ type RuntimeConfig struct {
 type StorageConfig struct {
 	Driver string `yaml:"driver" json:"driver"`
 	DSN    string `yaml:"dsn" json:"dsn,omitempty"`
+}
+
+// WorkspaceConfig controls isolated per-thread files and transfer limits.
+type WorkspaceConfig struct {
+	Root           string `yaml:"root" json:"root"`
+	MaxReadBytes   int64  `yaml:"max_read_bytes" json:"max_read_bytes"`
+	MaxWriteBytes  int64  `yaml:"max_write_bytes" json:"max_write_bytes"`
+	MaxUploadBytes int64  `yaml:"max_upload_bytes" json:"max_upload_bytes"`
 }
 
 // SandboxConfig selects the host-execution boundary.
@@ -151,6 +160,10 @@ func Defaults() Config {
 			EventBuffer:      128,
 		},
 		Storage: StorageConfig{Driver: "sqlite", DSN: ".gofer/gofer.db"},
+		Workspace: WorkspaceConfig{
+			Root: ".gofer/workspaces", MaxReadBytes: 1 << 20,
+			MaxWriteBytes: 80 << 10, MaxUploadBytes: 32 << 20,
+		},
 		Sandbox: SandboxConfig{
 			Driver: "local", DockerBinary: "docker", CommandTimeoutSeconds: 600,
 			MaxTimeoutSeconds: 3600, MaxOutputBytes: 1 << 20, MaxScriptBytes: 64 << 10,
@@ -276,6 +289,10 @@ func (config Config) validateCore() error {
 	}
 	if config.Storage.Driver != "memory" && strings.TrimSpace(config.Storage.DSN) == "" {
 		return fmt.Errorf("%w: storage.dsn is required for %s", ErrInvalid, config.Storage.Driver)
+	}
+	if strings.TrimSpace(config.Workspace.Root) == "" || config.Workspace.MaxReadBytes <= 0 ||
+		config.Workspace.MaxWriteBytes <= 0 || config.Workspace.MaxUploadBytes <= 0 {
+		return fmt.Errorf("%w: workspace root and size limits are required", ErrInvalid)
 	}
 	return nil
 }
