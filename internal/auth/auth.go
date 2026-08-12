@@ -182,6 +182,9 @@ func GatewayPolicy(request *http.Request) (Permission, bool) {
 	if strings.Contains(path, "/runs/") && strings.HasSuffix(path, "/cancel") {
 		return RunsCancel, false
 	}
+	if permission, matched := feedbackPermission(request); matched {
+		return permission, false
+	}
 	if strings.Contains(path, "/runs") {
 		if request.Method == http.MethodPost {
 			return RunsCreate, false
@@ -201,6 +204,21 @@ func GatewayPolicy(request *http.Request) (Permission, bool) {
 		return ThreadsWrite, false
 	}
 	return Admin, false
+}
+
+func feedbackPermission(request *http.Request) (Permission, bool) {
+	path := request.URL.Path
+	if !strings.HasPrefix(path, "/api/threads/") || !strings.Contains(path, "/feedback") {
+		return "", false
+	}
+	switch request.Method {
+	case http.MethodGet:
+		return ThreadsRead, true
+	case http.MethodDelete:
+		return ThreadsDelete, true
+	default:
+		return ThreadsWrite, true
+	}
 }
 
 func resourcePermission(request *http.Request) (Permission, bool) {

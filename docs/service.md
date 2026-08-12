@@ -102,6 +102,24 @@ reports `skipped_historical_turn` and starts with an empty workspace so newer
 files cannot appear in older conversation state. The response exposes both
 the source identifiers and the workspace/history modes.
 
+Run feedback is durable and owner-scoped:
+
+```text
+POST   /api/threads/{thread_id}/runs/{run_id}/feedback
+PUT    /api/threads/{thread_id}/runs/{run_id}/feedback
+GET    /api/threads/{thread_id}/runs/{run_id}/feedback
+GET    /api/threads/{thread_id}/runs/{run_id}/feedback/stats
+DELETE /api/threads/{thread_id}/runs/{run_id}/feedback
+DELETE /api/threads/{thread_id}/runs/{run_id}/feedback/{feedback_id}
+GET    /api/runs/{run_id}/feedback
+```
+
+Ratings are `1` or `-1`. `POST` accepts optional `message_id` and `comment`
+fields, while `PUT` atomically creates or updates the caller's canonical
+run-level rating. A user cannot read or delete another user's record, and run
+IDs are always verified against the owning thread. Feedback uses
+`threads:read`, `threads:write`, and `threads:delete` permissions.
+
 Run events are available as JSON or resumable server-sent events:
 
 ```text

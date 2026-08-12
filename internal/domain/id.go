@@ -31,6 +31,9 @@ type MessageID string
 // EventID uniquely identifies an immutable journal event.
 type EventID string
 
+// FeedbackID uniquely identifies one user feedback record.
+type FeedbackID string
+
 // NewThreadID generates a time-sortable thread identifier.
 func NewThreadID() (ThreadID, error) {
 	value, err := newID("thr", time.Now(), rand.Read)
@@ -85,6 +88,20 @@ func ParseEventID(value string) (EventID, error) {
 		return "", err
 	}
 	return EventID(value), nil
+}
+
+// NewFeedbackID generates a time-sortable feedback identifier.
+func NewFeedbackID() (FeedbackID, error) {
+	value, err := newID("fbk", time.Now(), rand.Read)
+	return FeedbackID(value), err
+}
+
+// ParseFeedbackID validates and returns value as a FeedbackID.
+func ParseFeedbackID(value string) (FeedbackID, error) {
+	if err := validateID(value, "fbk"); err != nil {
+		return "", err
+	}
+	return FeedbackID(value), nil
 }
 
 func newID(prefix string, now time.Time, read func([]byte) (int, error)) (string, error) {

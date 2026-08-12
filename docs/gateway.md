@@ -40,6 +40,9 @@ store interface, so transport code does not own model or database behavior.
 - Assistant discovery and create-and-stream/wait run variants match the
   LangGraph client initialization flow. Stateless runs either create an owned
   thread or reuse the explicitly configured owned thread.
+- Run feedback supports create, idempotent update, scoped list/delete, and
+  aggregate positive/negative statistics. A unique thread/run/user boundary
+  prevents ambiguous UI ratings.
 
 The gateway reserves the `user_id` metadata key for its authenticated owner.
 It is never accepted from or returned to clients. Every thread, run, event,
@@ -92,3 +95,9 @@ restart. Deletion is rejected while a run or local cleanup goroutine remains
 active. Journal watches poll the database rather than relying only on
 process-local signals, so events written by another service instance become
 visible to an SSE consumer.
+
+Feedback rows reference both their thread and run, use a unique
+thread/run/user key for atomic upserts, and are removed by foreign-key cascade
+when their conversation is deleted. The in-memory adapter implements the same
+isolation and duplicate rules for deterministic tests and disposable service
+mode.

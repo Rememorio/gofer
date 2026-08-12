@@ -23,6 +23,7 @@ import (
 	"github.com/Rememorio/gofer/internal/conversation"
 	"github.com/Rememorio/gofer/internal/domain"
 	"github.com/Rememorio/gofer/internal/event"
+	"github.com/Rememorio/gofer/internal/feedback"
 	"github.com/Rememorio/gofer/internal/gateway"
 	"github.com/Rememorio/gofer/internal/mcp"
 	"github.com/Rememorio/gofer/internal/memory"
@@ -52,6 +53,7 @@ type Service struct {
 	workspaces *workspace.Manager
 	artifacts  *artifact.Catalog
 	controls   *control.Service
+	feedback   feedback.Store
 	browser    *browser.Manager
 	mcp        *mcp.Client
 	skills     *skill.Catalog
@@ -119,6 +121,10 @@ func (service *Service) open() error {
 	service.controls, err = control.NewService(controlStore, time.Now)
 	if err != nil {
 		return err
+	}
+	service.feedback = feedback.NewInMemory()
+	if provider, ok := service.store.(interface{ FeedbackState() feedback.Store }); ok {
+		service.feedback = provider.FeedbackState()
 	}
 	if err = service.openProviders(); err != nil {
 		return err
@@ -287,6 +293,7 @@ func (service *Service) openHandler() error {
 	service.resourceRoutes(apiMux)
 	service.controlRoutes(apiMux)
 	service.branchRoutes(apiMux)
+	service.feedbackRoutes(apiMux)
 	service.memoryRoutes(apiMux)
 	var api http.Handler = apiMux
 	if service.config.Auth.Enabled {
@@ -346,6 +353,7 @@ func (service *Service) CleanupThread(ctx context.Context, threadID domain.Threa
 	}
 	service.artifacts.RemoveThread(threadID)
 	cleanupErr = errors.Join(cleanupErr, service.controls.Delete(ctx, threadID))
+	cleanupErr = errors.Join(cleanupErr, service.feedback.DeleteThread(ctx, threadID))
 	cleanupErr = errors.Join(cleanupErr, service.workspaces.Remove(threadID))
 	return cleanupErr
 }

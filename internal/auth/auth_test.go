@@ -120,6 +120,9 @@ func TestGatewayPolicyResourceRoutes(t *testing.T) {
 		{http.MethodGet, "/api/memory-extra", Admin},
 		{http.MethodPost, "/api/threads/x/runs/y/stream", RunsRead},
 		{http.MethodPost, "/api/threads/x/runs/y/stream?action=interrupt", RunsCancel},
+		{http.MethodPut, "/api/threads/x/runs/y/feedback", ThreadsWrite},
+		{http.MethodGet, "/api/threads/x/runs/y/feedback/stats", ThreadsRead},
+		{http.MethodDelete, "/api/threads/x/runs/y/feedback", ThreadsDelete},
 	} {
 		request := httptest.NewRequestWithContext(context.Background(), test.method, test.path, nil)
 		permission, public := GatewayPolicy(request)

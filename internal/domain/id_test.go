@@ -19,6 +19,7 @@ func TestIDRoundTrips(t *testing.T) {
 		{name: "run", newID: func() (string, error) { value, err := NewRunID(); return string(value), err }, parse: func(value string) error { _, err := ParseRunID(value); return err }},
 		{name: "message", newID: func() (string, error) { value, err := NewMessageID(); return string(value), err }, parse: func(value string) error { _, err := ParseMessageID(value); return err }},
 		{name: "event", newID: func() (string, error) { value, err := NewEventID(); return string(value), err }, parse: func(value string) error { _, err := ParseEventID(value); return err }},
+		{name: "feedback", newID: func() (string, error) { value, err := NewFeedbackID(); return string(value), err }, parse: func(value string) error { _, err := ParseFeedbackID(value); return err }},
 	}
 
 	for _, test := range tests {

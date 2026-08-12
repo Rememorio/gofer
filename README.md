@@ -41,6 +41,9 @@ Owner-scoped conversations can also branch from any completed assistant turn.
 Gofer seeds an independent durable history and clones the latest workspace
 atomically; historical branches omit newer files to preserve temporal
 consistency.
+Run feedback supports durable thumbs-up/down ratings, optional message and
+comment context, idempotent updates, scoped deletion, and aggregate statistics
+through the same authenticated thread boundary.
 The `gofer serve` command now assembles the model provider, durable store,
 isolated workspaces, sandbox, browser, policy, runtime, gateway, graceful
 shutdown, and Prometheus endpoint into a runnable service. MCP tools, projected

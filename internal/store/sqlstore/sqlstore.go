@@ -12,6 +12,7 @@ import (
 	"github.com/Rememorio/gofer/internal/control"
 	"github.com/Rememorio/gofer/internal/domain"
 	"github.com/Rememorio/gofer/internal/event"
+	"github.com/Rememorio/gofer/internal/feedback"
 	"github.com/Rememorio/gofer/internal/memory"
 	"github.com/Rememorio/gofer/internal/store"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -115,6 +116,8 @@ var schema = []string{
 	`CREATE TABLE IF NOT EXISTS gofer_control_state (thread_id TEXT PRIMARY KEY REFERENCES gofer_threads(id) ON DELETE CASCADE,version BIGINT NOT NULL,goal TEXT NOT NULL,todos TEXT NOT NULL,updated_at TEXT NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS gofer_memory_entries (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,thread_id TEXT NOT NULL,agent_id TEXT NOT NULL,text TEXT NOT NULL,tags TEXT NOT NULL,category TEXT NOT NULL,confidence DOUBLE PRECISION NOT NULL,source TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,expires_at TEXT NOT NULL)`,
 	`CREATE INDEX IF NOT EXISTS gofer_memory_scope_idx ON gofer_memory_entries(user_id,thread_id,agent_id,updated_at)`,
+	`CREATE TABLE IF NOT EXISTS gofer_feedback (id TEXT PRIMARY KEY,run_id TEXT NOT NULL REFERENCES gofer_runs(id) ON DELETE CASCADE,thread_id TEXT NOT NULL REFERENCES gofer_threads(id) ON DELETE CASCADE,user_id TEXT NOT NULL,message_id TEXT NOT NULL,rating BIGINT NOT NULL,comment TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(thread_id,run_id,user_id))`,
+	`CREATE INDEX IF NOT EXISTS gofer_feedback_run_idx ON gofer_feedback(thread_id,run_id,created_at)`,
 }
 
 // ControlState exposes a durable goal and todo store backed by this database.
@@ -122,6 +125,9 @@ func (database *SQL) ControlState() control.Store { return &controlState{databas
 
 // MemoryState exposes durable scoped memory backed by this database.
 func (database *SQL) MemoryState() memory.Store { return &memoryState{database: database} }
+
+// FeedbackState exposes durable run feedback backed by this database.
+func (database *SQL) FeedbackState() feedback.Store { return &feedbackState{database: database} }
 
 // CreateThread persists a validated thread transactionally.
 func (database *SQL) CreateThread(ctx context.Context, thread domain.Thread) error {

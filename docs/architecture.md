@@ -36,6 +36,7 @@ Planned package groups:
 | `internal/conversation` | Cross-run history reconstruction, branching, overlap merging, and input journaling |
 | `internal/control` | Optimistic per-thread goals and ordered todo plans |
 | `internal/event` | Typed immutable events and ordered journal contracts |
+| `internal/feedback` | Owner-scoped run ratings, comments, and aggregate statistics |
 | `internal/thread` | Threads, messages, history, and checkpoints |
 | `internal/model` | Normalized model request, response, stream, and usage types |
 | `internal/tool` | Typed registry, validation, policy, and execution |
