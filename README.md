@@ -86,6 +86,10 @@ Tool-using runs also have a visible terminal-response guarantee. One empty
 post-tool answer receives a bounded automatic retry; another empty answer (or
 an exhausted turn budget) records a user-visible fallback and fails the run
 explicitly instead of silently completing or losing the provider usage.
+When a provider reaches its output-token limit after producing visible
+terminal text, Gofer preserves that partial answer and succeeds with the
+explicit `model_length_capped` reason. Empty or tool-bearing capped responses
+remain failures, so truncated tool arguments can never execute.
 The `gofer serve` command now assembles the model provider, durable store,
 isolated workspaces, sandbox, browser, policy, runtime, gateway, graceful
 shutdown, and Prometheus endpoint into a runnable service. MCP tools, projected
@@ -132,6 +136,8 @@ Provider-safe interrupted transcripts are documented in
 [Tool history repair](docs/tool-history.md).
 Post-tool final-answer recovery is documented in
 [Terminal responses](docs/terminal-response.md).
+Provider output-length handling is documented in
+[Model length caps](docs/model-length.md).
 
 ## Development
 

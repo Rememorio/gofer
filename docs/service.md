@@ -72,6 +72,11 @@ Optional agent extensions are initialized before the listener becomes ready:
   fails the run with `stop_reason: terminal_error`. Tool-call responses,
   visible text, provider truncation, and turns without tool results are not
   rewritten.
+- Model length-cap reporting is always active. An output-token stop with
+  non-whitespace text and no tool calls preserves the exact partial answer and
+  completes with `stop_reason: model_length_capped`. Empty capped responses and
+  responses that still carry tool intent fail with the provider truncation
+  error; their tool calls are never journaled or executed.
 - `subagent_spawn` starts bounded parallel child agents. Each child gets an
   isolated run journal and tool registry while sharing only the parent's
   policy-controlled workspace, configured extensions, and tenant scope. The

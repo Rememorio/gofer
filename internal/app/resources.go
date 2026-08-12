@@ -92,6 +92,7 @@ func (service *Service) listFeatures(writer http.ResponseWriter, _ *http.Request
 		"loop_detection":      map[string]bool{"enabled": service.config.LoopDetection.Enabled},
 		"tool_history_repair": map[string]bool{"enabled": true},
 		"terminal_response":   map[string]bool{"enabled": true},
+		"model_length_reason": map[string]bool{"enabled": true},
 	})
 }
 

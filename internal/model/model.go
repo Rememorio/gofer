@@ -90,6 +90,10 @@ const (
 	// StopTerminalError identifies a visible host fallback after the provider
 	// returned no final answer twice. Providers never emit this reason.
 	StopTerminalError StopReason = "terminal_error"
+	// StopModelLengthCapped preserves a visible provider response that reached
+	// its output-token limit. Providers emit StopMaxTokens; host middleware
+	// promotes only safe terminal text to this run-level reason.
+	StopModelLengthCapped StopReason = "model_length_capped"
 )
 
 // Response is the fully collected result of one model stream.
@@ -223,7 +227,8 @@ func (usage Usage) valid() bool {
 
 func (reason StopReason) valid() bool {
 	switch reason {
-	case StopEndTurn, StopToolUse, StopMaxTokens, StopContentFilter, StopLoopCapped, StopTerminalError:
+	case StopEndTurn, StopToolUse, StopMaxTokens, StopContentFilter, StopLoopCapped,
+		StopTerminalError, StopModelLengthCapped:
 		return true
 	default:
 		return false

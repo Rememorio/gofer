@@ -46,6 +46,7 @@ Planned package groups:
 | `internal/loopdetect` | Bounded repeated-call and per-tool frequency detection |
 | `internal/toolhistory` | Transient provider-safe tool call/result transcript repair |
 | `internal/terminalresponse` | Bounded empty post-tool response recovery and visible fallback |
+| `internal/modellength` | Safe visible provider length-cap preservation |
 | `internal/tooloutput` | Typed result synopsis, atomic spill storage, and context-budget fallback |
 | `internal/mcp` | MCP transports, bounded discovery, and namespaced tool adapters |
 | `internal/policy` | Ordered authorization rules and tool resource extraction |
@@ -96,3 +97,4 @@ Planned package groups:
 25. Loop warnings are temporary model context; hard-capped tool calls never enter the journal or execute.
 26. Every provider-bound tool call has exactly one adjacent result; recovery never rewrites durable history.
 27. A tool-using user turn ends with visible assistant text or an explicit durable run failure.
+28. Length-capped tool intent never executes; only visible tool-free partial text may complete as capped.

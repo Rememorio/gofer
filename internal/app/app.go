@@ -32,6 +32,7 @@ import (
 	"github.com/Rememorio/gofer/internal/memory"
 	"github.com/Rememorio/gofer/internal/model"
 	"github.com/Rememorio/gofer/internal/model/openaichat"
+	"github.com/Rememorio/gofer/internal/modellength"
 	"github.com/Rememorio/gofer/internal/observe"
 	"github.com/Rememorio/gofer/internal/policy"
 	"github.com/Rememorio/gofer/internal/readbeforewrite"
@@ -647,6 +648,7 @@ func (service *Service) runtimeMiddleware(threadID domain.ThreadID, provider con
 	// Repair runs last so compaction and every temporary context contribution
 	// have already produced the exact transcript sent to the provider.
 	middleware = append(middleware, historyRepair)
+	middleware = append(middleware, modellength.New())
 	terminalGuard, err := terminalresponse.New(terminalresponse.DefaultConfig())
 	if err != nil {
 		return nil, err

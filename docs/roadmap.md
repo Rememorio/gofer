@@ -9,7 +9,8 @@ module is committed and pushed separately.
    runs, checkpoints, and an in-memory reference store.
 3. **Agent loop:** normalized model API, streaming, middleware, tool calls,
    input/result guardrails, loop detection, interrupted-history repair,
-   terminal-response recovery, budgets, cancellation, and deterministic replay.
+   terminal-response and model-length recovery, budgets, cancellation, and
+   deterministic replay.
 4. **Tools and extensions:** built-ins, MCP client integration, skills, file
    workspace, read-before-write version gates, artifacts, and policy enforcement.
 5. **Execution:** local and container sandboxes with resource and path limits.

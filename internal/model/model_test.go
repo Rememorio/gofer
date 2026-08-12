@@ -110,6 +110,9 @@ func TestChunkValidation(t *testing.T) {
 	if err := (Chunk{Kind: ChunkDone, StopReason: StopTerminalError}).Validate(); err != nil {
 		t.Fatalf("terminal-error chunk error = %v", err)
 	}
+	if err := (Chunk{Kind: ChunkDone, StopReason: StopModelLengthCapped}).Validate(); err != nil {
+		t.Fatalf("model-length-capped chunk error = %v", err)
+	}
 
 	tests := []Chunk{
 		{Kind: ChunkToolCall},
