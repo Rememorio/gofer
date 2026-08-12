@@ -34,13 +34,14 @@ The manager also provides two separate concurrency controls:
 
 ## Native providers
 
-Gofer includes direct Slack, Telegram, Discord, Feishu/Lark, and DingTalk
-adapters. They implement the
+Gofer includes direct Slack, Telegram, Discord, Feishu/Lark, DingTalk, WeCom,
+and WeChat adapters. They implement the
 same `Sender` and inbound-source contracts as the generic webhook, so the
 manager owns startup, shutdown, queueing, authentication, deduplication, and
-conversation serialization uniformly. A provider is fully connected before
-startup succeeds. Connections retry with capped exponential backoff and stop
-with the service context.
+conversation serialization uniformly. Socket providers authenticate before
+startup succeeds; polling providers initialize their bounded worker before
+returning. Connections retry with capped exponential backoff and stop with the
+service context.
 
 Slack uses Socket Mode and therefore needs no public callback URL. Configure a
 bot token and an app-level token with `connections:write`; the app must also
@@ -135,6 +136,46 @@ channels:
     client_secret: ${DINGTALK_CLIENT_SECRET}
     allowed_users: [manager123]
     request_timeout_seconds: 30
+    max_attempts: 3
+```
+
+WeCom AI Bot uses the official WebSocket frame protocol. Gofer authenticates
+the connection before service startup succeeds, maintains heartbeats and
+bounded reconnects, and retains only an expiring passive-reply route. Text,
+voice transcription, image, file, and mixed messages normalize into the same
+channel envelope. Remote media URLs and AES keys are not exposed to the agent.
+
+```yaml
+channels:
+  enabled: true
+  wecom:
+    enabled: true
+    bot_id: ${WECOM_BOT_ID}
+    bot_secret: ${WECOM_BOT_SECRET}
+    working_message: Working on it...
+    allowed_users: [zhangsan]
+    heartbeat_seconds: 30
+    request_timeout_seconds: 20
+    max_attempts: 3
+```
+
+WeChat uses the iLink HTTP/JSON protocol. The opaque `get_updates_buf` cursor
+advances only after every message in a batch has entered Gofer's queue. Each
+reply echoes the inbound `context_token`, uses a stable retry ID, and sends the
+required token type, random UIN, and encoded client-version headers. A session
+expiry response stops polling instead of retrying an invalid credential.
+
+```yaml
+channels:
+  enabled: true
+  wechat:
+    enabled: true
+    bot_token: ${WECHAT_BOT_TOKEN}
+    ilink_bot_id: ${WECHAT_ILINK_BOT_ID}
+    channel_version: "1.0"
+    allowed_users: [wx_user_id]
+    poll_timeout_seconds: 35
+    request_timeout_seconds: 45
     max_attempts: 3
 ```
 

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -265,6 +266,8 @@ type ChannelsConfig struct {
 	Discord           ChannelDiscordConfig   `yaml:"discord" json:"discord"`
 	Feishu            ChannelFeishuConfig    `yaml:"feishu" json:"feishu"`
 	DingTalk          ChannelDingTalkConfig  `yaml:"dingtalk" json:"dingtalk"`
+	WeCom             ChannelWeComConfig     `yaml:"wecom" json:"wecom"`
+	WeChat            ChannelWeChatConfig    `yaml:"wechat" json:"wechat"`
 }
 
 // ChannelBindingConfig bootstraps one operator-approved external identity.
@@ -339,6 +342,32 @@ type ChannelDingTalkConfig struct {
 	ClientID              string   `yaml:"client_id" json:"client_id"`
 	ClientSecret          string   `yaml:"client_secret" json:"-"`
 	AllowedUsers          []string `yaml:"allowed_users" json:"allowed_users"`
+	RequestTimeoutSeconds int      `yaml:"request_timeout_seconds" json:"request_timeout_seconds"`
+	MaxAttempts           int      `yaml:"max_attempts" json:"max_attempts"`
+}
+
+// ChannelWeComConfig controls the WeCom AI Bot WebSocket provider.
+type ChannelWeComConfig struct {
+	Enabled               bool     `yaml:"enabled" json:"enabled"`
+	BotID                 string   `yaml:"bot_id" json:"bot_id"`
+	BotSecret             string   `yaml:"bot_secret" json:"-"`
+	WorkingMessage        string   `yaml:"working_message" json:"working_message"`
+	AllowedUsers          []string `yaml:"allowed_users" json:"allowed_users"`
+	HeartbeatSeconds      int      `yaml:"heartbeat_seconds" json:"heartbeat_seconds"`
+	RequestTimeoutSeconds int      `yaml:"request_timeout_seconds" json:"request_timeout_seconds"`
+	MaxAttempts           int      `yaml:"max_attempts" json:"max_attempts"`
+}
+
+// ChannelWeChatConfig controls the WeChat iLink long-polling provider.
+type ChannelWeChatConfig struct {
+	Enabled               bool     `yaml:"enabled" json:"enabled"`
+	BotToken              string   `yaml:"bot_token" json:"-"`
+	ILinkBotID            string   `yaml:"ilink_bot_id" json:"ilink_bot_id,omitempty"`
+	ILinkAppID            string   `yaml:"ilink_app_id" json:"ilink_app_id,omitempty"`
+	RouteTag              string   `yaml:"route_tag" json:"route_tag,omitempty"`
+	ChannelVersion        string   `yaml:"channel_version" json:"channel_version"`
+	AllowedUsers          []string `yaml:"allowed_users" json:"allowed_users"`
+	PollTimeoutSeconds    int      `yaml:"poll_timeout_seconds" json:"poll_timeout_seconds"`
 	RequestTimeoutSeconds int      `yaml:"request_timeout_seconds" json:"request_timeout_seconds"`
 	MaxAttempts           int      `yaml:"max_attempts" json:"max_attempts"`
 }
@@ -460,6 +489,8 @@ func Defaults() Config {
 			Discord:           ChannelDiscordConfig{RequestTimeoutSeconds: 20, MaxAttempts: 3},
 			Feishu:            ChannelFeishuConfig{Domain: "https://open.feishu.cn", RequestTimeoutSeconds: 20, MaxAttempts: 3},
 			DingTalk:          ChannelDingTalkConfig{RequestTimeoutSeconds: 30, MaxAttempts: 3},
+			WeCom:             ChannelWeComConfig{WorkingMessage: "Working on it...", HeartbeatSeconds: 30, RequestTimeoutSeconds: 20, MaxAttempts: 3},
+			WeChat:            ChannelWeChatConfig{ChannelVersion: "1.0", PollTimeoutSeconds: 35, RequestTimeoutSeconds: 45, MaxAttempts: 3},
 		},
 		Title: TitleConfig{Enabled: true, MaxWords: 6, MaxChars: 60},
 		Suggestions: SuggestionsConfig{
@@ -702,7 +733,13 @@ func validateNativeChannels(channels ChannelsConfig) error {
 	if err := validateFeishuChannel(channels.Enabled, channels.Feishu); err != nil {
 		return err
 	}
-	return validateDingTalkChannel(channels.Enabled, channels.DingTalk)
+	if err := validateDingTalkChannel(channels.Enabled, channels.DingTalk); err != nil {
+		return err
+	}
+	if err := validateWeComChannel(channels.Enabled, channels.WeCom); err != nil {
+		return err
+	}
+	return validateWeChatChannel(channels.Enabled, channels.WeChat)
 }
 
 func validateSlackChannel(channelsEnabled bool, channel ChannelSlackConfig) error {
@@ -763,6 +800,46 @@ func validateDingTalkChannel(channelsEnabled bool, channel ChannelDingTalkConfig
 		return fmt.Errorf("%w: invalid DingTalk channel configuration", ErrInvalid)
 	}
 	return nil
+}
+
+func validateWeComChannel(channelsEnabled bool, channel ChannelWeComConfig) error {
+	if !channel.Enabled {
+		return nil
+	}
+	if !channelsEnabled || strings.TrimSpace(channel.BotID) == "" || strings.TrimSpace(channel.BotSecret) == "" ||
+		len(channel.WorkingMessage) > 2000 || channel.HeartbeatSeconds < 5 || channel.HeartbeatSeconds > 120 ||
+		channel.RequestTimeoutSeconds < 1 || channel.RequestTimeoutSeconds > 120 || channel.MaxAttempts < 1 || channel.MaxAttempts > 5 ||
+		!validChannelIDs(channel.AllowedUsers) {
+		return fmt.Errorf("%w: invalid WeCom channel configuration", ErrInvalid)
+	}
+	return nil
+}
+
+func validateWeChatChannel(channelsEnabled bool, channel ChannelWeChatConfig) error {
+	if !channel.Enabled {
+		return nil
+	}
+	if !channelsEnabled || strings.TrimSpace(channel.BotToken) == "" || len(channel.ILinkBotID) > 512 || len(channel.ILinkAppID) > 512 || len(channel.RouteTag) > 256 ||
+		!validWeChatVersion(channel.ChannelVersion) || channel.PollTimeoutSeconds < 1 || channel.PollTimeoutSeconds > 60 ||
+		channel.RequestTimeoutSeconds <= channel.PollTimeoutSeconds || channel.RequestTimeoutSeconds > 120 ||
+		channel.MaxAttempts < 1 || channel.MaxAttempts > 5 || !validChannelIDs(channel.AllowedUsers) {
+		return fmt.Errorf("%w: invalid WeChat channel configuration", ErrInvalid)
+	}
+	return nil
+}
+
+func validWeChatVersion(value string) bool {
+	parts := strings.Split(value, ".")
+	if len(parts) < 1 || len(parts) > 3 {
+		return false
+	}
+	for _, part := range parts {
+		parsed, err := strconv.Atoi(part)
+		if err != nil || parsed < 0 || parsed > 255 {
+			return false
+		}
+	}
+	return true
 }
 
 func validChannelIDs(values []string) bool {

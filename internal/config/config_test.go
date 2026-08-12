@@ -345,6 +345,22 @@ func TestValidateRejectsInvalidConfigurations(t *testing.T) {
 			config.Channels.Enabled = true
 			config.Channels.DingTalk = ChannelDingTalkConfig{Enabled: true, ClientID: "client", ClientSecret: "secret", RequestTimeoutSeconds: 10, MaxAttempts: 6}
 		}},
+		{name: "channel WeCom heartbeat", mutate: func(config *Config) {
+			config.Channels.Enabled = true
+			config.Channels.WeCom = ChannelWeComConfig{Enabled: true, BotID: "bot", BotSecret: "secret", HeartbeatSeconds: 1, RequestTimeoutSeconds: 10, MaxAttempts: 1}
+		}},
+		{name: "channel WeCom credentials", mutate: func(config *Config) {
+			config.Channels.Enabled = true
+			config.Channels.WeCom = ChannelWeComConfig{Enabled: true, BotID: "bot", HeartbeatSeconds: 30, RequestTimeoutSeconds: 10, MaxAttempts: 1}
+		}},
+		{name: "channel WeChat version", mutate: func(config *Config) {
+			config.Channels.Enabled = true
+			config.Channels.WeChat = ChannelWeChatConfig{Enabled: true, BotToken: "token", ChannelVersion: "1.bad", PollTimeoutSeconds: 35, RequestTimeoutSeconds: 45, MaxAttempts: 1}
+		}},
+		{name: "channel WeChat timeout", mutate: func(config *Config) {
+			config.Channels.Enabled = true
+			config.Channels.WeChat = ChannelWeChatConfig{Enabled: true, BotToken: "token", ChannelVersion: "1.0", PollTimeoutSeconds: 35, RequestTimeoutSeconds: 35, MaxAttempts: 1}
+		}},
 		{name: "channel binding provider", mutate: func(config *Config) {
 			config.Channels.Bindings = []ChannelBindingConfig{{UserID: "u", Provider: "Webhook", ExternalUserID: "external"}}
 		}},
@@ -404,6 +420,8 @@ func TestNativeChannelConfigurationsValidate(t *testing.T) {
 	config.Channels.Discord = ChannelDiscordConfig{Enabled: true, BotToken: "bot", AllowedGuilds: []string{"G1"}, AllowedChannels: []string{"C1"}, RequestTimeoutSeconds: 20, MaxAttempts: 3}
 	config.Channels.Feishu = ChannelFeishuConfig{Enabled: true, AppID: "app", AppSecret: "secret", Domain: "https://open.larksuite.com", AllowedUsers: []string{"OU1"}, RequestTimeoutSeconds: 20, MaxAttempts: 3}
 	config.Channels.DingTalk = ChannelDingTalkConfig{Enabled: true, ClientID: "client", ClientSecret: "secret", AllowedUsers: []string{"staff1"}, RequestTimeoutSeconds: 30, MaxAttempts: 3}
+	config.Channels.WeCom = ChannelWeComConfig{Enabled: true, BotID: "bot", BotSecret: "secret", WorkingMessage: "Working", AllowedUsers: []string{"user1"}, HeartbeatSeconds: 30, RequestTimeoutSeconds: 20, MaxAttempts: 3}
+	config.Channels.WeChat = ChannelWeChatConfig{Enabled: true, BotToken: "token", ILinkBotID: "bot", ChannelVersion: "1.0", AllowedUsers: []string{"wx1"}, PollTimeoutSeconds: 35, RequestTimeoutSeconds: 45, MaxAttempts: 3}
 	if err := config.Validate(); err != nil {
 		t.Fatalf("Validate = %v", err)
 	}

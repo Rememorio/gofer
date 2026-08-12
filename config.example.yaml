@@ -205,6 +205,29 @@ channels:
     allowed_users: []
     request_timeout_seconds: 30
     max_attempts: 3
+  # WeCom AI Bot uses the official WebSocket frame protocol and needs no
+  # public callback URL.
+  wecom:
+    enabled: false
+    bot_id: ""
+    bot_secret: ""
+    working_message: Working on it...
+    allowed_users: []
+    heartbeat_seconds: 30
+    request_timeout_seconds: 20
+    max_attempts: 3
+  # WeChat iLink long polling requires a bot token produced by iLink login.
+  wechat:
+    enabled: false
+    bot_token: ""
+    ilink_bot_id: ""
+    ilink_app_id: ""
+    route_tag: ""
+    channel_version: "1.0"
+    allowed_users: []
+    poll_timeout_seconds: 35
+    request_timeout_seconds: 45
+    max_attempts: 3
 
 # Empty conversations receive a bounded local title after their first user
 # turn. Set model_name to use a configured model alias instead; failures still

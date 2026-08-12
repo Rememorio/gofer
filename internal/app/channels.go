@@ -80,7 +80,7 @@ func (service *Service) openChannels() error {
 func (service *Service) openNativeChannels(manager *channel.Manager) error {
 	openers := []func(*channel.Manager) error{
 		service.openSlackChannel, service.openTelegramChannel, service.openDiscordChannel,
-		service.openFeishuChannel, service.openDingTalkChannel,
+		service.openFeishuChannel, service.openDingTalkChannel, service.openWeComChannel, service.openWeChatChannel,
 	}
 	for _, open := range openers {
 		if err := open(manager); err != nil {
@@ -148,6 +148,33 @@ func (service *Service) openDingTalkChannel(manager *channel.Manager) error {
 	}
 	provider, err := channel.NewDingTalk(channel.DingTalkConfig{
 		ClientID: configured.ClientID, ClientSecret: configured.ClientSecret, AllowedUsers: configured.AllowedUsers,
+		RequestTimeout: time.Duration(configured.RequestTimeoutSeconds) * time.Second, MaxAttempts: configured.MaxAttempts,
+	})
+	return registerNativeChannel(manager, provider, err)
+}
+
+func (service *Service) openWeComChannel(manager *channel.Manager) error {
+	configured := service.config.Channels.WeCom
+	if !configured.Enabled {
+		return nil
+	}
+	provider, err := channel.NewWeCom(channel.WeComConfig{
+		BotID: configured.BotID, BotSecret: configured.BotSecret, WorkingMessage: configured.WorkingMessage,
+		AllowedUsers: configured.AllowedUsers, Heartbeat: time.Duration(configured.HeartbeatSeconds) * time.Second,
+		RequestTimeout: time.Duration(configured.RequestTimeoutSeconds) * time.Second, MaxAttempts: configured.MaxAttempts,
+	})
+	return registerNativeChannel(manager, provider, err)
+}
+
+func (service *Service) openWeChatChannel(manager *channel.Manager) error {
+	configured := service.config.Channels.WeChat
+	if !configured.Enabled {
+		return nil
+	}
+	provider, err := channel.NewWeChat(channel.WeChatConfig{
+		BotToken: configured.BotToken, ILinkBotID: configured.ILinkBotID, ILinkAppID: configured.ILinkAppID,
+		RouteTag: configured.RouteTag, ChannelVersion: configured.ChannelVersion, AllowedUsers: configured.AllowedUsers,
+		PollTimeout:    time.Duration(configured.PollTimeoutSeconds) * time.Second,
 		RequestTimeout: time.Duration(configured.RequestTimeoutSeconds) * time.Second, MaxAttempts: configured.MaxAttempts,
 	})
 	return registerNativeChannel(manager, provider, err)
