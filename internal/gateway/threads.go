@@ -141,7 +141,11 @@ func (handler *Handler) listRuns(writer http.ResponseWriter, request *http.Reque
 	}
 	responses := make([]runResponse, len(runs))
 	for index, run := range runs {
-		responses[index] = makeRunResponse(run)
+		responses[index], err = handler.enrichedRunResponse(request.Context(), run)
+		if err != nil {
+			writeError(writer, err)
+			return
+		}
 	}
 	writeJSON(writer, http.StatusOK, responses)
 }

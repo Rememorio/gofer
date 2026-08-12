@@ -43,6 +43,26 @@ func TestRunnerCompletesTextTurn(t *testing.T) {
 	assertEventKinds(t, fixture.store, fixture.run.ID, wantKinds)
 }
 
+func TestRunnerRecordsAuxiliaryModelUsage(t *testing.T) {
+	t.Parallel()
+	fixture := newFixtureWithMiddleware(t, [][]model.Chunk{{
+		{Kind: model.ChunkUsage, Usage: &model.Usage{InputTokens: 3, OutputTokens: 2}},
+		{Kind: model.ChunkTextDelta, Text: "done"},
+		{Kind: model.ChunkDone, StopReason: model.StopEndTurn},
+	}}, nil, []Middleware{usageMiddleware{}})
+	result, err := fixture.runner.Run(context.Background(), fixture.request)
+	if err != nil || result.Usage.InputTokens != 7 || result.Usage.OutputTokens != 3 {
+		t.Fatalf("Run() = %#v, %v", result, err)
+	}
+	assertEventKinds(t, fixture.store, fixture.run.ID, []event.Kind{
+		event.RunStarted, event.ModelUsage, event.MessageStarted, event.MessageDelta,
+		event.MessageCompleted, event.RunCompleted,
+	})
+	if err = RecordModelUsage(context.Background(), "unused", CallerMiddleware, model.Usage{}); err != nil {
+		t.Fatalf("RecordModelUsage(outside run) = %v", err)
+	}
+}
+
 func TestRunnerExecutesToolLoop(t *testing.T) {
 	t.Parallel()
 
@@ -261,9 +281,12 @@ func TestRunnerRejectsProtocolFailures(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newFixture(t, [][]model.Chunk{test.chunks}, nil)
-			_, err := fixture.runner.Run(context.Background(), fixture.request)
+			result, err := fixture.runner.Run(context.Background(), fixture.request)
 			if !errors.Is(err, test.want) {
 				t.Fatalf("Run() error = %v, want %v", err, test.want)
+			}
+			if result.Run.ID != fixture.run.ID || result.Turns != 1 {
+				t.Fatalf("partial result = %#v", result)
 			}
 			assertRunStatus(t, fixture.store, fixture.run.ID, domain.RunFailed)
 		})
@@ -306,6 +329,11 @@ func TestRunnerRejectsInvalidConstructionAndRunState(t *testing.T) {
 	if _, err := NewRunner(RunnerConfig{Store: memory, Provider: provider, MaxTurns: -1}); !errors.Is(err, ErrInvalidRunner) {
 		t.Fatalf("NewRunner(negative) error = %v, want ErrInvalidRunner", err)
 	}
+	invalidCaller := newFixture(t, nil, nil)
+	invalidCaller.request.Caller = "unknown"
+	if _, err := invalidCaller.runner.Run(context.Background(), invalidCaller.request); !errors.Is(err, model.ErrInvalidRequest) {
+		t.Fatalf("Run(invalid caller) error = %v", err)
+	}
 
 	fixture := newFixture(t, nil, nil)
 	started, err := fixture.store.TransitionRun(context.Background(), fixture.run.ID, domain.RunPending, domain.RunRunning, time.Now(), "")
@@ -331,6 +359,12 @@ type fixture struct {
 	provider *model.Scripted
 	run      domain.Run
 	request  Request
+}
+
+type usageMiddleware struct{ NopMiddleware }
+
+func (usageMiddleware) BeforeModel(ctx context.Context, _ *model.Request) error {
+	return RecordModelUsage(ctx, "compact", CallerMiddleware, model.Usage{InputTokens: 4, OutputTokens: 1})
 }
 
 func newFixture(t *testing.T, responses [][]model.Chunk, registry *tool.Registry) fixture {

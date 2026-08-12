@@ -45,7 +45,7 @@ func TestSubagentToolsRunIsolatedChildAgent(t *testing.T) {
 	if err = json.Unmarshal(waited.Output, &task); err != nil {
 		t.Fatal(err)
 	}
-	if task.Status != subagent.Succeeded || task.Output.Text != "child result" || task.Output.Metadata["parent_run_id"] != string(launch.RunID) {
+	if task.Status != subagent.Succeeded || task.Output.Text != "child result" || task.Output.Metadata["parent_run_id"] != string(launch.RunID) || task.Output.Metadata["model"] != "test" || task.Output.Metadata["llm_call_count"] != "1" {
 		t.Fatalf("task = %#v", task)
 	}
 	if len(provider.Requests) != 1 || provider.Requests[0].Messages[0].Content[0].Text != "investigate" {
@@ -66,7 +66,7 @@ func TestChildExecutorRequiresTextResult(t *testing.T) {
 	}
 	failing := &model.Scripted{Err: errors.New("upstream")}
 	executor.provider = configuredProvider{provider: failing, model: "test"}
-	if _, err := executor.Execute(context.Background(), subagent.Request{Prompt: "work", Depth: 1}); err == nil {
+	if output, err := executor.Execute(context.Background(), subagent.Request{Prompt: "work", Depth: 1}); err == nil || output.Metadata["run_id"] == "" || output.Metadata["llm_call_count"] != "1" {
 		t.Fatal("Execute(provider failure) error = nil")
 	}
 	cancelled, cancel := context.WithCancel(context.Background())

@@ -120,6 +120,11 @@ func (ApproximateEstimator) Tokens(message domain.Message) int {
 	return 12 + (len(data)+3)/4
 }
 
+// Estimate returns the default network-free token estimate for messages.
+func Estimate(messages []domain.Message) int {
+	return messageTokens(ApproximateEstimator{}, messages)
+}
+
 func messageTokens(estimator Estimator, messages []domain.Message) int {
 	total := 0
 	for _, message := range messages {

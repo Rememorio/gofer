@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -75,15 +76,30 @@ func (executor childExecutor) Execute(ctx context.Context, request subagent.Requ
 	if executor.service.skills != nil {
 		system += "\n\n" + executor.service.skills.IndexPrompt()
 	}
-	result, err := runner.Run(ctx, runtime.Request{RunID: run.ID, Model: executor.provider.model, System: system, Messages: []domain.Message{message}})
+	result, err := runner.Run(ctx, runtime.Request{RunID: run.ID, Model: executor.provider.model, System: system, Messages: []domain.Message{message}, Caller: runtime.CallerSubagent})
 	if err != nil {
-		return subagent.Output{}, err
+		return subagent.Output{Metadata: childUsageMetadata(result, executor)}, err
 	}
 	text := finalAssistantText(result.Messages)
 	if text == "" {
 		return subagent.Output{}, errors.New("subagent completed without a text result")
 	}
-	return subagent.Output{Text: text, Metadata: map[string]string{"run_id": string(result.Run.ID), "parent_run_id": string(executor.launch.RunID)}}, nil
+	return subagent.Output{Text: text, Metadata: childUsageMetadata(result, executor)}, nil
+}
+
+func childUsageMetadata(result runtime.Result, executor childExecutor) map[string]string {
+	return map[string]string{
+		"run_id":             string(result.Run.ID),
+		"parent_run_id":      string(executor.launch.RunID),
+		"model":              executor.provider.model,
+		"caller":             runtime.CallerSubagent,
+		"input_tokens":       strconv.Itoa(result.Usage.InputTokens),
+		"output_tokens":      strconv.Itoa(result.Usage.OutputTokens),
+		"reasoning_tokens":   strconv.Itoa(result.Usage.ReasoningTokens),
+		"cache_read_tokens":  strconv.Itoa(result.Usage.CacheReadTokens),
+		"cache_write_tokens": strconv.Itoa(result.Usage.CacheWriteTokens),
+		"llm_call_count":     strconv.Itoa(result.Turns),
+	}
 }
 
 func (executor childExecutor) childTools() (*tool.Registry, []runtime.Middleware, error) {

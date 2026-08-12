@@ -15,6 +15,7 @@ import (
 	"github.com/Rememorio/gofer/internal/conversation"
 	"github.com/Rememorio/gofer/internal/domain"
 	"github.com/Rememorio/gofer/internal/event"
+	"github.com/Rememorio/gofer/internal/model"
 	"github.com/Rememorio/gofer/internal/store"
 )
 
@@ -29,6 +30,12 @@ type cleanupRecorder struct {
 	threadID   domain.ThreadID
 	ownerID    string
 	prepareErr error
+}
+
+type eventErrorStore struct{ store.Store }
+
+func (eventErrorStore) Events(context.Context, domain.RunID, uint64, int) ([]event.Event, error) {
+	return nil, errors.New("events unavailable")
 }
 
 func (cleaner *cleanupRecorder) PrepareThreadDelete(context.Context, domain.ThreadID) error {
@@ -367,7 +374,10 @@ func TestThreadHistoryStateAndDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	assistant, _ := domain.NewTextMessage(domain.RoleAssistant, "hi", now.Add(time.Second))
-	draft, _ := event.NewDraft(thread.ThreadID, run.RunID, event.MessageCompleted, assistant.CreatedAt, map[string]any{"message": assistant})
+	draft, _ := event.NewDraft(thread.ThreadID, run.RunID, event.MessageCompleted, assistant.CreatedAt, map[string]any{
+		"message": assistant, "model": "primary", "caller": "lead_agent",
+		"usage": model.Usage{InputTokens: 4, OutputTokens: 2}, "stop_reason": model.StopEndTurn,
+	})
 	if _, err := memory.Append(context.Background(), run.RunID, 2, draft); err != nil {
 		t.Fatal(err)
 	}
@@ -397,6 +407,7 @@ func TestThreadHistoryStateAndDeletion(t *testing.T) {
 	if len(listed) != 1 || listed[0].RunID != run.RunID {
 		t.Fatalf("runs = %#v", listed)
 	}
+	assertGatewayRunUsage(t, handler, thread.ThreadID, run.RunID, listed[0])
 	state := perform(t, handler, http.MethodGet, "/api/threads/"+string(thread.ThreadID)+"/state", "", nil)
 	if state.Code != http.StatusOK || !strings.Contains(state.Body.String(), `"title":"History"`) || !strings.Contains(state.Body.String(), `"hello"`) {
 		t.Fatalf("state = %d %s", state.Code, state.Body.String())
@@ -412,6 +423,19 @@ func TestThreadHistoryStateAndDeletion(t *testing.T) {
 	}
 	if cleaner.threadID != thread.ThreadID || cleaner.ownerID != "local" {
 		t.Fatalf("cleanup = %#v", cleaner)
+	}
+}
+
+func assertGatewayRunUsage(t *testing.T, handler *Handler, threadID domain.ThreadID, runID domain.RunID, listed runResponse) {
+	t.Helper()
+	if listed.TotalTokens != 6 || listed.LLMCallCount != 1 || listed.StopReason != string(model.StopEndTurn) {
+		t.Fatalf("run usage = %#v", listed)
+	}
+	gotRun := perform(t, handler, http.MethodGet, "/api/threads/"+string(threadID)+"/runs/"+string(runID), "", nil)
+	var enriched runResponse
+	decodeResponse(t, gotRun, &enriched)
+	if gotRun.Code != http.StatusOK || enriched.TotalInputTokens != 4 || enriched.MessageCount != 2 {
+		t.Fatalf("get run = %d %#v", gotRun.Code, enriched)
 	}
 }
 
@@ -453,6 +477,30 @@ func TestThreadManagementErrorResponses(t *testing.T) {
 	}
 	if metadata := publicMetadata(nil); len(metadata) != 0 {
 		t.Fatalf("publicMetadata(nil) = %#v", metadata)
+	}
+}
+
+func TestRunUsageEventFailuresAreReported(t *testing.T) {
+	t.Parallel()
+	memory := store.NewMemory()
+	thread, _ := domain.NewThread(time.Now())
+	if err := memory.CreateThread(context.Background(), thread); err != nil {
+		t.Fatal(err)
+	}
+	run, _ := domain.NewRun(thread.ID, time.Now())
+	if err := memory.CreateRun(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := New(Config{Store: eventErrorStore{Store: memory}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "/api/threads/" + string(thread.ID) + "/runs"
+	if response := perform(t, handler, http.MethodGet, base+"/"+string(run.ID), "", nil); response.Code != http.StatusInternalServerError {
+		t.Fatalf("get run event failure = %d", response.Code)
+	}
+	if response := perform(t, handler, http.MethodGet, base, "", nil); response.Code != http.StatusInternalServerError {
+		t.Fatalf("list runs event failure = %d", response.Code)
 	}
 }
 

@@ -39,6 +39,7 @@ Planned package groups:
 | `internal/feedback` | Owner-scoped run ratings, comments, and aggregate statistics |
 | `internal/thread` | Threads, messages, history, and checkpoints |
 | `internal/model` | Normalized model request, response, stream, and usage types |
+| `internal/usage` | Journal-derived run/thread token accounting and caller attribution |
 | `internal/tool` | Typed registry, validation, policy, and execution |
 | `internal/mcp` | MCP transports, bounded discovery, and namespaced tool adapters |
 | `internal/policy` | Ordered authorization rules and tool resource extraction |
@@ -77,3 +78,4 @@ Planned package groups:
 15. Scheduled work is dispatched only under an expiring owner lease.
 16. Durable thread state and files never cross an authenticated owner boundary.
 17. Conversation branches never mutate their source or expose files newer than the selected turn.
+18. Token totals are derived from immutable provider usage events and never double-count cache or reasoning detail.

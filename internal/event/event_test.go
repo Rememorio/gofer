@@ -55,6 +55,14 @@ func TestNewDraftSupportsEmptyPayload(t *testing.T) {
 	}
 }
 
+func TestModelUsageKindIsStable(t *testing.T) {
+	t.Parallel()
+	threadID, runID := testIDs(t)
+	if _, err := NewDraft(threadID, runID, ModelUsage, time.Now(), map[string]int{"input_tokens": 1}); err != nil {
+		t.Fatalf("NewDraft(ModelUsage) = %v", err)
+	}
+}
+
 func TestNewDraftReportsEncodingFailure(t *testing.T) {
 	t.Parallel()
 

@@ -14,6 +14,7 @@ import (
 	"github.com/Rememorio/gofer/internal/domain"
 	"github.com/Rememorio/gofer/internal/event"
 	"github.com/Rememorio/gofer/internal/store"
+	"github.com/Rememorio/gofer/internal/usage"
 )
 
 const maxRequestBytes = 1 << 20
@@ -64,12 +65,21 @@ type threadResponse struct {
 }
 
 type runResponse struct {
-	RunID     domain.RunID    `json:"run_id"`
-	ThreadID  domain.ThreadID `json:"thread_id"`
-	Status    string          `json:"status"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
-	Error     string          `json:"error,omitempty"`
+	RunID             domain.RunID    `json:"run_id"`
+	ThreadID          domain.ThreadID `json:"thread_id"`
+	Status            string          `json:"status"`
+	CreatedAt         time.Time       `json:"created_at"`
+	UpdatedAt         time.Time       `json:"updated_at"`
+	Error             string          `json:"error,omitempty"`
+	TotalInputTokens  int             `json:"total_input_tokens"`
+	TotalOutputTokens int             `json:"total_output_tokens"`
+	TotalTokens       int             `json:"total_tokens"`
+	LLMCallCount      int             `json:"llm_call_count"`
+	LeadAgentTokens   int             `json:"lead_agent_tokens"`
+	SubagentTokens    int             `json:"subagent_tokens"`
+	MiddlewareTokens  int             `json:"middleware_tokens"`
+	MessageCount      int             `json:"message_count"`
+	StopReason        string          `json:"stop_reason,omitempty"`
 }
 
 // RunStarter starts a newly persisted run without coupling HTTP to the runtime implementation.
@@ -273,7 +283,12 @@ func (handler *Handler) getRun(writer http.ResponseWriter, request *http.Request
 		writeError(writer, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, makeRunResponse(run))
+	response, err := handler.enrichedRunResponse(request.Context(), run)
+	if err != nil {
+		writeError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, response)
 }
 
 func (handler *Handler) cancelRun(writer http.ResponseWriter, request *http.Request) {
@@ -498,6 +513,25 @@ func makeRunResponse(run domain.Run) runResponse {
 	}
 	return runResponse{RunID: run.ID, ThreadID: run.ThreadID, Status: status,
 		CreatedAt: run.CreatedAt, UpdatedAt: updated, Error: run.Error}
+}
+
+func (handler *Handler) enrichedRunResponse(ctx context.Context, run domain.Run) (runResponse, error) {
+	records, err := handler.store.Events(ctx, run.ID, 0, 0)
+	if err != nil {
+		return runResponse{}, err
+	}
+	summary := usage.Summarize(records)
+	response := makeRunResponse(run)
+	response.TotalInputTokens = summary.InputTokens
+	response.TotalOutputTokens = summary.OutputTokens
+	response.TotalTokens = summary.TotalTokens()
+	response.LLMCallCount = summary.LLMCallCount
+	response.LeadAgentTokens = summary.LeadAgentTokens
+	response.SubagentTokens = summary.SubagentTokens
+	response.MiddlewareTokens = summary.MiddlewareTokens
+	response.MessageCount = summary.MessageCount
+	response.StopReason = summary.StopReason
+	return response, nil
 }
 
 func decodeJSON(writer http.ResponseWriter, request *http.Request, target any) error {

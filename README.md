@@ -44,6 +44,9 @@ consistency.
 Run feedback supports durable thumbs-up/down ratings, optional message and
 comment context, idempotent updates, scoped deletion, and aggregate statistics
 through the same authenticated thread boundary.
+Provider-reported token usage is journaled per model call and aggregated by
+thread, model, and caller. Main-agent, delegated subagent, and compaction calls
+share one exact, restart-safe accounting path with current-context estimates.
 The `gofer serve` command now assembles the model provider, durable store,
 isolated workspaces, sandbox, browser, policy, runtime, gateway, graceful
 shutdown, and Prometheus endpoint into a runnable service. MCP tools, projected

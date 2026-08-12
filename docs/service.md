@@ -147,6 +147,22 @@ cannot race and hide the final `run.completed`, `run.failed`, or
 `run.cancelled` event. Posting an existing stream with `action=interrupt` or
 `action=rollback` requests cancellation; `wait=1` waits for terminal state.
 
+Provider usage is available on individual run responses and as a thread
+aggregate:
+
+```text
+GET /api/threads/{thread_id}/token-usage
+GET /api/threads/{thread_id}/token-usage?include_active=true
+```
+
+The response includes input/output/total tokens, completed run count, per-model
+tokens and run participation, and `lead_agent`, `subagent`, and `middleware`
+caller buckets. By default aggregation includes successful and failed runs;
+`include_active=true` also exposes durable progress from running runs.
+`context_usage` estimates the currently materialized conversation against the
+configured context limit and reports a one-decimal percentage. Synthetic
+branch-history runs are excluded from billing totals.
+
 Clients can discover configured capabilities and manage runtime skills without
 receiving provider credentials:
 

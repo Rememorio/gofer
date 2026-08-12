@@ -103,7 +103,7 @@ func TestManagerCancellationFailuresAndClose(t *testing.T) {
 	once := sync.Once{}
 	manager, _ := NewManager(context.Background(), Config{Executor: executorFunc(func(ctx context.Context, request Request) (Output, error) {
 		if request.Prompt == "fail" {
-			return Output{}, errors.New("boom")
+			return Output{Metadata: map[string]string{"usage": "preserved"}}, errors.New("boom")
 		}
 		once.Do(func() { close(started) })
 		<-ctx.Done()
@@ -111,7 +111,7 @@ func TestManagerCancellationFailuresAndClose(t *testing.T) {
 	}), MaxParallel: 1, MaxChildren: 3, MaxDepth: 1, NewID: func() (string, error) { return fmt.Sprint(id.Add(1)), nil }})
 	failed, _ := manager.Spawn(context.Background(), Request{Depth: 1, Prompt: "fail"})
 	result, _ := manager.Wait(context.Background(), failed.ID)
-	if result.Status != Failed || result.Error != "boom" {
+	if result.Status != Failed || result.Error != "boom" || result.Output.Metadata["usage"] != "preserved" {
 		t.Fatalf("failed=%#v", result)
 	}
 	running, _ := manager.Spawn(context.Background(), Request{Depth: 1, Prompt: "wait"})

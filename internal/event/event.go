@@ -30,6 +30,7 @@ const (
 	MessageStarted   Kind = "message.started"
 	MessageDelta     Kind = "message.delta"
 	MessageCompleted Kind = "message.completed"
+	ModelUsage       Kind = "model.usage"
 	ToolStarted      Kind = "tool.started"
 	ToolCompleted    Kind = "tool.completed"
 	ToolFailed       Kind = "tool.failed"
@@ -166,7 +167,7 @@ func marshalPayload(payload any) (json.RawMessage, error) {
 func (kind Kind) valid() bool {
 	switch kind {
 	case RunCreated, RunStarted, RunInterrupted, RunCompleted, RunFailed, RunCancelled,
-		MessageStarted, MessageDelta, MessageCompleted,
+		MessageStarted, MessageDelta, MessageCompleted, ModelUsage,
 		ToolStarted, ToolCompleted, ToolFailed, CheckpointSaved:
 		return true
 	default:

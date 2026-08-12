@@ -119,6 +119,9 @@ func TestApproximateEstimatorAndHooks(t *testing.T) {
 	if (ApproximateEstimator{}).Tokens(msg) <= 12 {
 		t.Fatal("token estimate too low")
 	}
+	if Estimate([]domain.Message{msg}) != (ApproximateEstimator{}).Tokens(msg) {
+		t.Fatal("conversation estimate differs from estimator")
+	}
 	compactor, _ := New(Config{MaxTokens: 10, MinRecentMessages: 1, MaxSummaryCharacters: 1,
 		Summarizer: summaryFunc(func(context.Context, []domain.Message) (string, error) { return "x", nil })})
 	if compactor.AfterModel(context.Background(), model.Response{}) != nil || compactor.BeforeTool(context.Background(), domain.ToolCall{}) != nil || compactor.AfterTool(context.Background(), domain.ToolCall{}, domain.ToolResult{}) != nil {

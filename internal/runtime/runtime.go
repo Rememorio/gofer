@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +19,12 @@ import (
 const (
 	defaultMaxTurns         = 100
 	defaultMaxParallelTools = 8
+	// CallerLeadAgent identifies primary conversation model calls.
+	CallerLeadAgent = "lead_agent"
+	// CallerSubagent identifies delegated child model calls.
+	CallerSubagent = "subagent"
+	// CallerMiddleware identifies auxiliary model calls.
+	CallerMiddleware = "middleware"
 )
 
 var (
@@ -63,6 +70,7 @@ type Request struct {
 	Messages    []domain.Message
 	MaxTokens   int
 	Temperature *float64
+	Caller      string
 }
 
 // Result is the completed durable run and normalized conversation state.
@@ -114,7 +122,11 @@ func (runner *Runner) Run(ctx context.Context, request Request) (Result, error) 
 	if err == nil {
 		return result, nil
 	}
-	return Result{}, execution.finishError(ctx, err)
+	err = execution.finishError(ctx, err)
+	return Result{
+		Run: execution.state, Messages: append([]domain.Message(nil), execution.messages...),
+		Usage: execution.usage, Turns: execution.turns,
+	}, err
 }
 
 type execution struct {
@@ -142,7 +154,31 @@ type toolOutcome struct {
 	skip   bool
 }
 
+type usageRecorderKey struct{}
+
+type usageRecorder func(context.Context, string, string, model.Usage) error
+
+// RecordModelUsage durably attributes an auxiliary model call when invoked
+// inside a runtime middleware hook. Outside an active run it is a no-op.
+func RecordModelUsage(ctx context.Context, modelName, caller string, usage model.Usage) error {
+	if ctx == nil {
+		return fmt.Errorf("%w: context is required", model.ErrInvalidRequest)
+	}
+	record, ok := ctx.Value(usageRecorderKey{}).(usageRecorder)
+	if !ok {
+		return nil
+	}
+	return record(ctx, modelName, caller, usage)
+}
+
 func (runner *Runner) newExecution(ctx context.Context, request Request) (*execution, error) {
+	request.Caller = strings.TrimSpace(request.Caller)
+	if request.Caller == "" {
+		request.Caller = CallerLeadAgent
+	}
+	if request.Caller != CallerLeadAgent && request.Caller != CallerSubagent && request.Caller != CallerMiddleware {
+		return nil, fmt.Errorf("%w: unsupported caller", model.ErrInvalidRequest)
+	}
 	run, err := runner.store.Run(ctx, request.RunID)
 	if err != nil {
 		return nil, err
@@ -215,6 +251,7 @@ func (execution *execution) start(ctx context.Context) error {
 }
 
 func (execution *execution) modelTurn(ctx context.Context) (model.Response, domain.Message, error) {
+	ctx = context.WithValue(ctx, usageRecorderKey{}, usageRecorder(execution.recordModelUsage))
 	request := model.Request{
 		Model:       execution.request.Model,
 		System:      execution.request.System,
@@ -247,6 +284,7 @@ func (execution *execution) modelTurn(ctx context.Context) (model.Response, doma
 	}
 	if err := execution.journal.append(ctx, event.MessageCompleted, map[string]any{
 		"message": message, "usage": response.Usage, "stop_reason": response.StopReason,
+		"model": execution.request.Model, "caller": execution.request.Caller,
 	}); err != nil {
 		return model.Response{}, domain.Message{}, err
 	}
@@ -255,6 +293,20 @@ func (execution *execution) modelTurn(ctx context.Context) (model.Response, doma
 	}
 	addUsage(&execution.usage, response.Usage)
 	return response, message, nil
+}
+
+func (execution *execution) recordModelUsage(ctx context.Context, modelName, caller string, next model.Usage) error {
+	modelName = strings.TrimSpace(modelName)
+	caller = strings.TrimSpace(caller)
+	if modelName == "" || caller != CallerLeadAgent && caller != CallerSubagent && caller != CallerMiddleware ||
+		next.InputTokens < 0 || next.OutputTokens < 0 || next.ReasoningTokens < 0 || next.CacheReadTokens < 0 || next.CacheWriteTokens < 0 {
+		return fmt.Errorf("%w: invalid model usage", model.ErrInvalidRequest)
+	}
+	if err := execution.journal.append(ctx, event.ModelUsage, map[string]any{"model": modelName, "caller": caller, "usage": next}); err != nil {
+		return err
+	}
+	addUsage(&execution.usage, next)
+	return nil
 }
 
 func (execution *execution) collect(ctx context.Context, stream model.Stream) (model.Response, error) {
@@ -350,6 +402,7 @@ func (execution *execution) complete(ctx context.Context) (Result, error) {
 	execution.state = run
 	if err := execution.journal.append(ctx, event.RunCompleted, map[string]any{
 		"turns": execution.turns, "usage": execution.usage,
+		"model": execution.request.Model, "caller": execution.request.Caller,
 	}); err != nil {
 		return Result{}, err
 	}

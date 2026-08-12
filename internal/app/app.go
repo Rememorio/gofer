@@ -294,6 +294,7 @@ func (service *Service) openHandler() error {
 	service.controlRoutes(apiMux)
 	service.branchRoutes(apiMux)
 	service.feedbackRoutes(apiMux)
+	service.usageRoutes(apiMux)
 	service.memoryRoutes(apiMux)
 	var api http.Handler = apiMux
 	if service.config.Auth.Enabled {
@@ -452,6 +453,7 @@ func (service *Service) execute(ctx context.Context, launch gateway.StartRequest
 	result, runErr := runner.Run(ctx, runtime.Request{
 		RunID: launch.RunID, Model: provider.model, System: settings.system,
 		Messages: messages, MaxTokens: settings.maxTokens, Temperature: settings.temperature,
+		Caller: runtime.CallerLeadAgent,
 	})
 	if runErr != nil {
 		service.settlePending(launch, runErr)

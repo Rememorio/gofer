@@ -43,6 +43,10 @@ store interface, so transport code does not own model or database behavior.
 - Run feedback supports create, idempotent update, scoped list/delete, and
   aggregate positive/negative statistics. A unique thread/run/user boundary
   prevents ambiguous UI ratings.
+- Run responses expose journal-derived token totals, call count, caller
+  attribution, message count, and stop reason. The thread token-usage endpoint
+  aggregates completed runs by model and caller and can optionally include
+  active progress.
 
 The gateway reserves the `user_id` metadata key for its authenticated owner.
 It is never accepted from or returned to clients. Every thread, run, event,
@@ -65,6 +69,21 @@ a bounded staging directory and atomic rename. Historical branches deliberately
 skip that copy because the current files may have been created after the
 selected message. Clone failures remove the newly created target without
 changing source history or files.
+
+## Token accounting
+
+Every completed primary model call stores provider-reported usage, model name,
+caller role, and stop reason with its immutable message event. Auxiliary
+compaction calls use a dedicated usage event. Successful child agents return
+their complete accounting metadata through the parent tool result; repeated
+`get`, `wait`, or `list` observations are deduplicated by child run ID.
+
+Thread aggregation reads those journals instead of maintaining mutable shadow
+counters. This keeps in-memory, SQLite, and PostgreSQL behavior identical,
+survives restart without schema migration, and lets older events degrade to an
+`unknown` model bucket. Total tokens are input plus output; reasoning and cache
+figures remain detailed fields and are not double-counted. Branch history seed
+runs are marked synthetic and excluded.
 
 The launch envelope supports input, command, assistant, metadata, config,
 context, checkpoint, interrupt, stream, disconnect, and multitask fields.

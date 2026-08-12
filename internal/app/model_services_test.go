@@ -15,6 +15,7 @@ func TestModelSummarizer(t *testing.T) {
 	t.Parallel()
 	provider := &model.Scripted{Responses: [][]model.Chunk{{
 		{Kind: model.ChunkTextDelta, Text: " concise summary "},
+		{Kind: model.ChunkUsage, Usage: &model.Usage{InputTokens: 4, OutputTokens: 2}},
 		{Kind: model.ChunkDone, StopReason: model.StopEndTurn},
 	}}}
 	message, _ := domain.NewTextMessage(domain.RoleUser, "long conversation", time.Now())

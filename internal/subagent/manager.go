@@ -189,6 +189,7 @@ func (manager *Manager) run(ctx context.Context, current *managed) {
 func (manager *Manager) finish(current *managed, output Output, err error) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
+	current.task.Output = cloneOutput(output)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		current.task.Status = Cancelled
 	} else if err != nil {
@@ -196,7 +197,6 @@ func (manager *Manager) finish(current *managed, output Output, err error) {
 		current.task.Error = err.Error()
 	} else {
 		current.task.Status = Succeeded
-		current.task.Output = cloneOutput(output)
 	}
 	current.task.FinishedAt = manager.now()
 	manager.appendEventLocked(current.task.ID, current.task.Status)

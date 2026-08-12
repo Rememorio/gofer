@@ -7,6 +7,7 @@ import (
 
 	"github.com/Rememorio/gofer/internal/domain"
 	"github.com/Rememorio/gofer/internal/model"
+	"github.com/Rememorio/gofer/internal/runtime"
 )
 
 type modelSummarizer struct {
@@ -27,6 +28,9 @@ func (summarizer modelSummarizer) Summarize(ctx context.Context, messages []doma
 	defer func() { _ = stream.Close() }()
 	response, err := model.Collect(stream, nil)
 	if err != nil {
+		return "", err
+	}
+	if err = runtime.RecordModelUsage(ctx, summarizer.model, runtime.CallerMiddleware, response.Usage); err != nil {
 		return "", err
 	}
 	text := strings.TrimSpace(response.Text)
