@@ -43,6 +43,7 @@ Planned package groups:
 | `internal/model/providerfactory` | Validated provider selection without SDK leakage into the service |
 | `internal/model/openaichat` | OpenAI-compatible Chat Completions streaming adapter |
 | `internal/model/anthropicmessages` | Native Anthropic Messages streaming adapter |
+| `internal/modelservice` | Bounded tool-free model calls for auxiliary UI services |
 | `internal/usage` | Journal-derived run/thread token accounting and caller attribution |
 | `internal/tool` | Typed registry, validation, policy, and execution |
 | `internal/guardrail` | Temporary user-input framing and recursive untrusted-result neutralization |

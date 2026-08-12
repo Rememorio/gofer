@@ -107,6 +107,7 @@ func assertResourceFeatures(t *testing.T, features map[string]map[string]bool) {
 		!features["terminal_response"]["enabled"] ||
 		!features["model_length_reason"]["enabled"] ||
 		!features["safety_finish_reason"]["enabled"] ||
+		!features["automatic_title"]["enabled"] || !features["suggestions"]["enabled"] || !features["input_polish"]["enabled"] ||
 		features["browser_control"]["enabled"] || features["web_search"]["enabled"] || features["web_fetch"]["enabled"] {
 		t.Fatalf("features = %#v", features)
 	}

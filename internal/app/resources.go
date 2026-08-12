@@ -91,6 +91,9 @@ func (service *Service) listFeatures(writer http.ResponseWriter, _ *http.Request
 		"browser_control":      map[string]bool{"enabled": service.browser != nil},
 		"web_search":           map[string]bool{"enabled": service.research != nil && service.research.HasSearch()},
 		"web_fetch":            map[string]bool{"enabled": service.research != nil && service.research.HasFetch()},
+		"automatic_title":      map[string]bool{"enabled": service.config.Title.Enabled},
+		"suggestions":          map[string]bool{"enabled": service.config.Suggestions.Enabled},
+		"input_polish":         map[string]bool{"enabled": service.config.InputPolish.Enabled},
 		"skills":               map[string]bool{"enabled": service.skills != nil},
 		"memory":               map[string]bool{"enabled": service.memories != nil},
 		"scheduler":            map[string]bool{"enabled": service.config.Scheduler.Enabled},
@@ -401,7 +404,7 @@ func writeResourceError(writer http.ResponseWriter, err error) {
 		status = http.StatusNotFound
 	case errors.Is(err, workspace.ErrTooLarge):
 		status = http.StatusRequestEntityTooLarge
-	case errors.Is(err, workspace.ErrInvalidPath), errors.Is(err, workspace.ErrNotRegular), errors.Is(err, artifact.ErrInvalidArtifact):
+	case errors.Is(err, domain.ErrInvalidID), errors.Is(err, workspace.ErrInvalidPath), errors.Is(err, workspace.ErrNotRegular), errors.Is(err, artifact.ErrInvalidArtifact):
 		status = http.StatusBadRequest
 	case errors.Is(err, store.ErrInvalidQuery):
 		status = http.StatusBadRequest

@@ -91,6 +91,7 @@ type Store interface {
 	Thread(context.Context, domain.ThreadID) (domain.Thread, error)
 	Threads(context.Context, ThreadQuery) ([]domain.Thread, error)
 	PatchThread(context.Context, domain.ThreadID, ThreadPatch, time.Time) (domain.Thread, error)
+	SetThreadTitleIfEmpty(context.Context, domain.ThreadID, string, time.Time) (domain.Thread, bool, error)
 	DeleteThread(context.Context, domain.ThreadID) error
 	CreateRun(context.Context, domain.Run) error
 	Run(context.Context, domain.RunID) (domain.Run, error)

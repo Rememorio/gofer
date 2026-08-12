@@ -27,6 +27,10 @@ Opt-in web research adds normalized Brave or SearXNG search plus bounded HTML,
 text, and JSON retrieval. Its guarded transport validates every DNS answer and
 redirect, dials approved addresses directly, and marks all remote content as
 untrusted before model use.
+Conversation assistance now includes atomic first-turn titles, pre-send draft
+polishing with slash-command preservation, and fail-soft follow-up suggestions.
+All three use bounded tool-free model calls, and automatic titles never
+overwrite a user rename.
 Long-running task control now includes optimistic goal and todo state,
 hierarchically scoped memory recall, safe conversation compaction, and bounded
 parallel child agents with ordered lifecycle events. Goal and todo snapshots
@@ -153,6 +157,8 @@ Provider configuration and normalized protocol behavior are documented in
 [Model providers](docs/model-providers.md).
 Search, direct document retrieval, and outbound network policy are documented
 in [Web research](docs/web-research.md).
+Automatic titles, input polishing, and follow-up suggestions are documented in
+[Conversation services](docs/conversation-services.md).
 
 ## Development
 

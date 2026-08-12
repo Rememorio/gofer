@@ -128,6 +128,20 @@ GET  /api/assistants/{assistant_id}/schemas
 describe Gofer's agent/tool loop and message state without exposing provider
 credentials.
 
+Composer and post-response helpers are exposed separately from durable runs:
+
+```text
+POST /api/input-polish
+GET  /api/suggestions/config
+POST /api/threads/{thread_id}/suggestions
+```
+
+Input polishing is non-persistent and requires `runs:create`. Suggestions are
+owner-scoped, require `threads:read`, and fail soft with an empty list. Empty
+threads receive an atomic bounded title after their first turn; an optional
+title model alias never overwrites a manual rename. See
+[Conversation services](conversation-services.md).
+
 `assistant_id` selects a configured model alias. Inputs accept OpenAI-style
 roles as well as LangChain's `human` and `ai` message types. Text and image
 content blocks, assistant tool calls, and tool results are normalized before

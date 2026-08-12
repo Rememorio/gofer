@@ -332,6 +332,7 @@ func (service *Service) openHandler() error {
 	apiMux := http.NewServeMux()
 	apiMux.Handle("/", gatewayHandler)
 	service.schedulerRoutes(apiMux)
+	service.conversationServiceRoutes(apiMux)
 	service.resourceRoutes(apiMux)
 	service.controlRoutes(apiMux)
 	service.branchRoutes(apiMux)
@@ -512,6 +513,7 @@ func (service *Service) execute(ctx context.Context, launch gateway.StartRequest
 	if runErr != nil {
 		service.settlePending(launch, runErr)
 	}
+	service.assignAutomaticTitle(launch.ThreadID, result.Messages, runErr)
 	status := "failed"
 	if runErr == nil {
 		status = string(result.Run.Status)

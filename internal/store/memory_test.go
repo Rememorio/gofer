@@ -289,6 +289,30 @@ func TestMemoryThreadCatalogLifecycle(t *testing.T) {
 	}
 }
 
+func TestMemorySetsGeneratedTitleOnlyWhenEmpty(t *testing.T) {
+	t.Parallel()
+	memory := NewMemory()
+	now := time.Now()
+	thread, _ := domain.NewThread(now)
+	if err := memory.CreateThread(context.Background(), thread); err != nil {
+		t.Fatal(err)
+	}
+	generated, changed, err := memory.SetThreadTitleIfEmpty(context.Background(), thread.ID, " Generated ", now.Add(time.Second))
+	if err != nil || !changed || generated.Title != "Generated" {
+		t.Fatalf("SetThreadTitleIfEmpty() = %#v, %v, %v", generated, changed, err)
+	}
+	generated, changed, err = memory.SetThreadTitleIfEmpty(context.Background(), thread.ID, "Replacement", now.Add(2*time.Second))
+	if err != nil || changed || generated.Title != "Generated" {
+		t.Fatalf("SetThreadTitleIfEmpty(existing) = %#v, %v, %v", generated, changed, err)
+	}
+	if _, _, err = memory.SetThreadTitleIfEmpty(context.Background(), domain.ThreadID("missing"), "x", now); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SetThreadTitleIfEmpty(missing) = %v", err)
+	}
+	if _, _, err = memory.SetThreadTitleIfEmpty(context.Background(), thread.ID, " ", now); !errors.Is(err, ErrInvalidQuery) {
+		t.Fatalf("SetThreadTitleIfEmpty(invalid) = %v", err)
+	}
+}
+
 func TestThreadQueryPatchAndOwnershipValidation(t *testing.T) {
 	t.Parallel()
 	if _, err := (ThreadQuery{}).Normalize(); !errors.Is(err, ErrInvalidQuery) {

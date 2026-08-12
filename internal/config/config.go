@@ -43,6 +43,9 @@ type Config struct {
 	Auth            AuthConfig            `yaml:"auth" json:"auth"`
 	Scheduler       SchedulerConfig       `yaml:"scheduler" json:"scheduler"`
 	Channels        ChannelsConfig        `yaml:"channels" json:"channels"`
+	Title           TitleConfig           `yaml:"title" json:"title"`
+	Suggestions     SuggestionsConfig     `yaml:"suggestions" json:"suggestions"`
+	InputPolish     InputPolishConfig     `yaml:"input_polish" json:"input_polish"`
 	Models          []ModelConfig         `yaml:"models" json:"models"`
 }
 
@@ -239,6 +242,27 @@ type ChannelsConfig struct {
 	DedupeTTLSeconds int  `yaml:"dedupe_ttl_seconds" json:"dedupe_ttl_seconds"`
 }
 
+// TitleConfig controls automatic first-exchange conversation titles.
+type TitleConfig struct {
+	Enabled   bool   `yaml:"enabled" json:"enabled"`
+	MaxWords  int    `yaml:"max_words" json:"max_words"`
+	MaxChars  int    `yaml:"max_chars" json:"max_chars"`
+	ModelName string `yaml:"model_name" json:"model_name,omitempty"`
+}
+
+// SuggestionsConfig controls follow-up question generation.
+type SuggestionsConfig struct {
+	Enabled        bool `yaml:"enabled" json:"enabled"`
+	MaxSuggestions int  `yaml:"max_suggestions" json:"max_suggestions"`
+}
+
+// InputPolishConfig controls pre-send draft rewriting.
+type InputPolishConfig struct {
+	Enabled   bool   `yaml:"enabled" json:"enabled"`
+	MaxChars  int    `yaml:"max_chars" json:"max_chars"`
+	ModelName string `yaml:"model_name" json:"model_name,omitempty"`
+}
+
 // ModelConfig names one model exposed to agent runs.
 type ModelConfig struct {
 	Name      string         `yaml:"name" json:"name"`
@@ -322,6 +346,11 @@ func Defaults() Config {
 		Auth:      AuthConfig{},
 		Scheduler: SchedulerConfig{PollIntervalSeconds: 5, LeaseDurationSeconds: 300, BatchSize: 32},
 		Channels:  ChannelsConfig{MaxInflight: 32, DedupeTTLSeconds: 86400},
+		Title:     TitleConfig{Enabled: true, MaxWords: 6, MaxChars: 60},
+		Suggestions: SuggestionsConfig{
+			Enabled: true, MaxSuggestions: 3,
+		},
+		InputPolish: InputPolishConfig{Enabled: true, MaxChars: 4000},
 	}
 }
 
@@ -405,7 +434,44 @@ func (config Config) Validate() error {
 	if err := validateServices(config.Auth, config.Scheduler, config.Channels); err != nil {
 		return err
 	}
-	return validateModels(config.Models)
+	if err := validateConversationServices(config.Title, config.Suggestions, config.InputPolish); err != nil {
+		return err
+	}
+	if err := validateModels(config.Models); err != nil {
+		return err
+	}
+	return validateServiceModelAliases(config)
+}
+
+func validateConversationServices(title TitleConfig, suggestions SuggestionsConfig, polish InputPolishConfig) error {
+	if title.MaxWords < 1 || title.MaxWords > 20 || title.MaxChars < 10 || title.MaxChars > 200 ||
+		strings.TrimSpace(title.ModelName) != title.ModelName {
+		return fmt.Errorf("%w: invalid title configuration", ErrInvalid)
+	}
+	if suggestions.MaxSuggestions < 1 || suggestions.MaxSuggestions > 5 {
+		return fmt.Errorf("%w: invalid suggestions configuration", ErrInvalid)
+	}
+	if polish.MaxChars < 1 || polish.MaxChars > 100_000 || strings.TrimSpace(polish.ModelName) != polish.ModelName {
+		return fmt.Errorf("%w: invalid input polish configuration", ErrInvalid)
+	}
+	return nil
+}
+
+func validateServiceModelAliases(config Config) error {
+	aliases := map[string]string{"title.model_name": config.Title.ModelName, "input_polish.model_name": config.InputPolish.ModelName}
+	known := make(map[string]struct{}, len(config.Models))
+	for _, model := range config.Models {
+		known[model.Name] = struct{}{}
+	}
+	for field, alias := range aliases {
+		if alias == "" {
+			continue
+		}
+		if _, exists := known[alias]; !exists {
+			return fmt.Errorf("%w: %s references unknown model %q", ErrInvalid, field, alias)
+		}
+	}
+	return nil
 }
 
 func validateLoopDetection(config LoopDetectionConfig) error {

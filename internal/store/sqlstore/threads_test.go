@@ -53,6 +53,48 @@ func TestSQLiteThreadCatalogPatchListAndDelete(t *testing.T) {
 	}
 }
 
+func TestSQLiteSetsGeneratedTitleOnlyWhenEmpty(t *testing.T) {
+	t.Parallel()
+	database := openSQLite(t, filepath.Join(t.TempDir(), "gofer.db"))
+	defer func() { _ = database.Close() }()
+	now := time.Now().UTC()
+	thread, _ := domain.NewThread(now)
+	if err := database.CreateThread(context.Background(), thread); err != nil {
+		t.Fatal(err)
+	}
+	generated, changed, err := database.SetThreadTitleIfEmpty(context.Background(), thread.ID, " Generated ", now.Add(time.Second))
+	if err != nil || !changed || generated.Title != "Generated" {
+		t.Fatalf("SetThreadTitleIfEmpty() = %#v, %v, %v", generated, changed, err)
+	}
+	generated, changed, err = database.SetThreadTitleIfEmpty(context.Background(), thread.ID, "Replacement", now.Add(2*time.Second))
+	if err != nil || changed || generated.Title != "Generated" {
+		t.Fatalf("SetThreadTitleIfEmpty(existing) = %#v, %v, %v", generated, changed, err)
+	}
+	missing, _ := domain.NewThreadID()
+	if _, _, err = database.SetThreadTitleIfEmpty(context.Background(), missing, "x", now); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("SetThreadTitleIfEmpty(missing) = %v", err)
+	}
+	if _, _, err = database.SetThreadTitleIfEmpty(context.Background(), thread.ID, " ", now); !errors.Is(err, store.ErrInvalidQuery) {
+		t.Fatalf("SetThreadTitleIfEmpty(invalid) = %v", err)
+	}
+	older, _ := domain.NewThread(now)
+	if err = database.CreateThread(context.Background(), older); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = database.SetThreadTitleIfEmpty(context.Background(), older.ID, "Older", now.Add(-time.Second)); !errors.Is(err, domain.ErrInvalidThread) {
+		t.Fatalf("SetThreadTitleIfEmpty(old timestamp) = %v", err)
+	}
+	stored, _ := database.Thread(context.Background(), older.ID)
+	if stored.Title != "" {
+		t.Fatalf("failed title transaction persisted %q", stored.Title)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err = database.SetThreadTitleIfEmpty(cancelled, older.ID, "Cancelled", now.Add(time.Second)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("SetThreadTitleIfEmpty(cancelled) = %v", err)
+	}
+}
+
 func TestSQLiteThreadCatalogErrorsAndEmptyPages(t *testing.T) {
 	t.Parallel()
 	database := openSQLite(t, filepath.Join(t.TempDir(), "gofer.db"))

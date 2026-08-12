@@ -223,11 +223,10 @@ func feedbackPermission(request *http.Request) (Permission, bool) {
 
 func resourcePermission(request *http.Request) (Permission, bool) {
 	path := request.URL.Path
-	resourcePath := path == "/api/models" || strings.HasPrefix(path, "/api/models/") || path == "/api/features" ||
-		path == "/api/assistants" || strings.HasPrefix(path, "/api/assistants/") ||
-		path == "/api/skills" || strings.HasPrefix(path, "/api/skills/") ||
-		strings.HasPrefix(path, "/api/threads/") && (strings.Contains(path, "/uploads") || strings.Contains(path, "/artifacts"))
-	if resourcePath {
+	if permission, matched := conversationServicePermission(request); matched {
+		return permission, true
+	}
+	if isResourcePath(path) {
 		if request.Method == http.MethodGet || path == "/api/assistants/search" && request.Method == http.MethodPost {
 			return ResourcesRead, true
 		}
@@ -246,6 +245,27 @@ func resourcePermission(request *http.Request) (Permission, bool) {
 		return MemoryWrite, true
 	}
 	return "", false
+}
+
+func isResourcePath(path string) bool {
+	return path == "/api/models" || strings.HasPrefix(path, "/api/models/") || path == "/api/features" ||
+		path == "/api/assistants" || strings.HasPrefix(path, "/api/assistants/") ||
+		path == "/api/skills" || strings.HasPrefix(path, "/api/skills/") ||
+		strings.HasPrefix(path, "/api/threads/") && (strings.Contains(path, "/uploads") || strings.Contains(path, "/artifacts"))
+}
+
+func conversationServicePermission(request *http.Request) (Permission, bool) {
+	path := request.URL.Path
+	switch {
+	case path == "/api/input-polish" && request.Method == http.MethodPost:
+		return RunsCreate, true
+	case path == "/api/suggestions/config" && request.Method == http.MethodGet:
+		return ResourcesRead, true
+	case strings.HasPrefix(path, "/api/threads/") && strings.HasSuffix(path, "/suggestions") && request.Method == http.MethodPost:
+		return ThreadsRead, true
+	default:
+		return "", false
+	}
 }
 
 type principalKey struct{}

@@ -85,6 +85,41 @@ func (database *SQL) PatchThread(ctx context.Context, id domain.ThreadID, patch 
 	return thread, nil
 }
 
+// SetThreadTitleIfEmpty atomically assigns a generated title without
+// overwriting an existing or concurrently user-edited title.
+func (database *SQL) SetThreadTitleIfEmpty(ctx context.Context, id domain.ThreadID, title string, at time.Time) (domain.Thread, bool, error) {
+	title = strings.TrimSpace(title)
+	if title == "" || len(title) > 500 || at.IsZero() {
+		return domain.Thread{}, false, store.ErrInvalidQuery
+	}
+	tx, err := database.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return domain.Thread{}, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	thread, err := scanThread(tx.QueryRowContext(ctx, database.bind(`SELECT id,title,metadata,created_at,updated_at FROM gofer_threads WHERE id=?`), id))
+	if err != nil || thread.Title != "" {
+		return thread, false, err
+	}
+	thread.Title = title
+	thread.UpdatedAt = at.UTC()
+	if err = thread.Validate(); err != nil {
+		return domain.Thread{}, false, err
+	}
+	result, err := tx.ExecContext(ctx, database.bind(`UPDATE gofer_threads SET title=?,updated_at=? WHERE id=? AND title=''`), title, formatTime(at), id)
+	if err != nil {
+		return domain.Thread{}, false, classifyConflict(err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil || affected != 1 {
+		return domain.Thread{}, false, errors.Join(store.ErrConflict, err)
+	}
+	if err = tx.Commit(); err != nil {
+		return domain.Thread{}, false, classifyConflict(err)
+	}
+	return thread, true, nil
+}
+
 // DeleteThread transactionally removes a conversation with only terminal runs.
 func (database *SQL) DeleteThread(ctx context.Context, id domain.ThreadID) error {
 	tx, err := database.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})

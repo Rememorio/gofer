@@ -127,6 +127,24 @@ channels:
   max_inflight: 32
   dedupe_ttl_seconds: 86400
 
+# Empty conversations receive a bounded local title after their first user
+# turn. Set model_name to use a configured model alias instead; failures still
+# fall back locally and never overwrite a manually assigned title.
+title:
+  enabled: true
+  max_words: 6
+  max_chars: 60
+  # model_name: primary
+
+suggestions:
+  enabled: true
+  max_suggestions: 3
+
+input_polish:
+  enabled: true
+  max_chars: 4000
+  # model_name: primary
+
 models:
   - name: primary
     provider: openai

@@ -108,6 +108,34 @@ func (memory *Memory) PatchThread(ctx context.Context, id domain.ThreadID, patch
 	return cloneThread(thread), nil
 }
 
+// SetThreadTitleIfEmpty atomically assigns a generated title without
+// overwriting an existing or concurrently user-edited title.
+func (memory *Memory) SetThreadTitleIfEmpty(ctx context.Context, id domain.ThreadID, title string, at time.Time) (domain.Thread, bool, error) {
+	if err := contextError(ctx); err != nil {
+		return domain.Thread{}, false, err
+	}
+	title = strings.TrimSpace(title)
+	if title == "" || len(title) > 500 || at.IsZero() {
+		return domain.Thread{}, false, ErrInvalidQuery
+	}
+	memory.mu.Lock()
+	defer memory.mu.Unlock()
+	thread, exists := memory.threads[id]
+	if !exists {
+		return domain.Thread{}, false, fmt.Errorf("set thread title %s: %w", id, ErrNotFound)
+	}
+	if thread.Title != "" {
+		return cloneThread(thread), false, nil
+	}
+	thread.Title = title
+	thread.UpdatedAt = at.UTC()
+	if err := thread.Validate(); err != nil {
+		return domain.Thread{}, false, err
+	}
+	memory.threads[id] = cloneThread(thread)
+	return cloneThread(thread), true, nil
+}
+
 // DeleteThread removes a conversation and terminal journal history.
 func (memory *Memory) DeleteThread(ctx context.Context, id domain.ThreadID) error {
 	if err := contextError(ctx); err != nil {

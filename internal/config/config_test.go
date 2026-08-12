@@ -91,6 +91,29 @@ func TestWebDefaults(t *testing.T) {
 	}
 }
 
+func TestConversationServiceDefaults(t *testing.T) {
+	t.Parallel()
+
+	config := Defaults()
+	if !config.Title.Enabled || config.Title.MaxWords != 6 || config.Title.MaxChars != 60 ||
+		!config.Suggestions.Enabled || config.Suggestions.MaxSuggestions != 3 ||
+		!config.InputPolish.Enabled || config.InputPolish.MaxChars != 4000 {
+		t.Fatalf("conversation service defaults = %#v, %#v, %#v", config.Title, config.Suggestions, config.InputPolish)
+	}
+}
+
+func TestConversationServicesAcceptKnownModelAliases(t *testing.T) {
+	t.Parallel()
+
+	config := Defaults()
+	config.Models = []ModelConfig{{Name: "fast", Provider: "openai", Model: "gpt-test"}}
+	config.Title.ModelName = "fast"
+	config.InputPolish.ModelName = "fast"
+	if err := config.Validate(); err != nil {
+		t.Fatalf("Validate(): %v", err)
+	}
+}
+
 func TestLoadCanDisableRuntimeGuards(t *testing.T) {
 	t.Parallel()
 	config, err := Load(strings.NewReader("config_version: 1\nloop_detection:\n  enabled: false\nread_before_write:\n  enabled: false\nstorage:\n  driver: memory\n"))
@@ -247,6 +270,18 @@ func TestValidateRejectsInvalidConfigurations(t *testing.T) {
 		{name: "scheduler batch", mutate: func(config *Config) { config.Scheduler.BatchSize = 1001 }},
 		{name: "channel inflight", mutate: func(config *Config) { config.Channels.MaxInflight = 0 }},
 		{name: "channel dedupe", mutate: func(config *Config) { config.Channels.DedupeTTLSeconds = 59 }},
+		{name: "title words low", mutate: func(config *Config) { config.Title.MaxWords = 0 }},
+		{name: "title words high", mutate: func(config *Config) { config.Title.MaxWords = 21 }},
+		{name: "title chars low", mutate: func(config *Config) { config.Title.MaxChars = 9 }},
+		{name: "title chars high", mutate: func(config *Config) { config.Title.MaxChars = 201 }},
+		{name: "title model whitespace", mutate: func(config *Config) { config.Title.ModelName = " primary" }},
+		{name: "suggestions low", mutate: func(config *Config) { config.Suggestions.MaxSuggestions = 0 }},
+		{name: "suggestions high", mutate: func(config *Config) { config.Suggestions.MaxSuggestions = 6 }},
+		{name: "polish chars low", mutate: func(config *Config) { config.InputPolish.MaxChars = 0 }},
+		{name: "polish chars high", mutate: func(config *Config) { config.InputPolish.MaxChars = 100_001 }},
+		{name: "polish model whitespace", mutate: func(config *Config) { config.InputPolish.ModelName = " primary" }},
+		{name: "title unknown model", mutate: func(config *Config) { config.Title.ModelName = "missing" }},
+		{name: "polish unknown model", mutate: func(config *Config) { config.InputPolish.ModelName = "missing" }},
 		{name: "model field", mutate: func(config *Config) { config.Models = []ModelConfig{{Name: "x"}} }},
 		{name: "model unsupported provider", mutate: func(config *Config) {
 			config.Models = []ModelConfig{{Name: "x", Provider: "other", Model: "m"}}
