@@ -34,6 +34,7 @@ import (
 	"github.com/Rememorio/gofer/internal/skill"
 	"github.com/Rememorio/gofer/internal/store"
 	"github.com/Rememorio/gofer/internal/store/sqlstore"
+	"github.com/Rememorio/gofer/internal/subagent"
 	"github.com/Rememorio/gofer/internal/tool"
 	"github.com/Rememorio/gofer/internal/tool/builtin"
 	"github.com/Rememorio/gofer/internal/workspace"
@@ -335,11 +336,12 @@ func (service *Service) execute(ctx context.Context, launch gateway.StartRequest
 		return
 	}
 	defer func() { _ = threadWorkspace.Close() }()
-	registry, middleware, err := service.buildTools(threadWorkspace, launch, provider)
+	registry, middleware, children, err := service.buildTools(threadWorkspace, launch, provider)
 	if err != nil {
 		service.failPending(launch, err)
 		return
 	}
+	defer func() { _ = children.Close() }()
 	if service.skills != nil {
 		settings.system = strings.TrimSpace(settings.system + "\n\n" + service.skills.IndexPrompt())
 	}
@@ -372,19 +374,28 @@ func (service *Service) execute(ctx context.Context, launch gateway.StartRequest
 	_ = service.metrics.Observe("gofer_run_duration_seconds", map[string]string{"status": status}, time.Since(started).Seconds())
 }
 
-func (service *Service) buildTools(threadWorkspace *workspace.Thread, launch gateway.StartRequest, provider configuredProvider) (*tool.Registry, []runtime.Middleware, error) {
+func (service *Service) buildTools(threadWorkspace *workspace.Thread, launch gateway.StartRequest, provider configuredProvider) (*tool.Registry, []runtime.Middleware, *subagent.Manager, error) {
 	registry := tool.NewRegistry()
 	if err := service.registerCoreTools(registry, threadWorkspace, launch); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err := service.registerExtensionTools(registry, launch.ThreadID); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
+	}
+	children, err := service.newSubagents(threadWorkspace, launch, provider)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if err = (subagent.Tools{Manager: children, ParentID: string(launch.RunID)}).Register(registry); err != nil {
+		_ = children.Close()
+		return nil, nil, nil, err
 	}
 	middleware, err := service.runtimeMiddleware(launch.ThreadID, provider)
 	if err != nil {
-		return nil, nil, err
+		_ = children.Close()
+		return nil, nil, nil, err
 	}
-	return registry, middleware, nil
+	return registry, middleware, children, nil
 }
 
 func (service *Service) registerCoreTools(registry *tool.Registry, threadWorkspace *workspace.Thread, launch gateway.StartRequest) error {
@@ -439,6 +450,7 @@ func (service *Service) runtimeMiddleware(threadID domain.ThreadID, provider con
 	if service.memories != nil {
 		descriptors = mergeDescriptors(descriptors, memory.PolicyDescriptors())
 	}
+	descriptors = mergeDescriptors(descriptors, subagent.PolicyDescriptors())
 	authorizer, err := policy.NewStatic(policy.DecisionAllow)
 	if err != nil {
 		return nil, err

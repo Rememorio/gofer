@@ -97,6 +97,7 @@ func TestValidateRejectsInvalidConfigurations(t *testing.T) {
 		{name: "log level", mutate: func(config *Config) { config.LogLevel = "trace" }},
 		{name: "address", mutate: func(config *Config) { config.Server.Address = "bad" }},
 		{name: "runtime", mutate: func(config *Config) { config.Runtime.MaxTurns = 0 }},
+		{name: "runtime subagent depth", mutate: func(config *Config) { config.Runtime.MaxSubagentDepth = 0 }},
 		{name: "runtime context", mutate: func(config *Config) { config.Runtime.MaxContextTokens = 0 }},
 		{name: "runtime reserve", mutate: func(config *Config) { config.Runtime.ReserveTokens = config.Runtime.MaxContextTokens }},
 		{name: "runtime recent", mutate: func(config *Config) { config.Runtime.MinRecentMessages = 0 }},

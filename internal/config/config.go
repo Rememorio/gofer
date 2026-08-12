@@ -51,6 +51,7 @@ type RuntimeConfig struct {
 	MaxTurns          int `yaml:"max_turns" json:"max_turns"`
 	MaxParallelTools  int `yaml:"max_parallel_tools" json:"max_parallel_tools"`
 	MaxSubagents      int `yaml:"max_subagents" json:"max_subagents"`
+	MaxSubagentDepth  int `yaml:"max_subagent_depth" json:"max_subagent_depth"`
 	EventBuffer       int `yaml:"event_buffer" json:"event_buffer"`
 	MaxContextTokens  int `yaml:"max_context_tokens" json:"max_context_tokens"`
 	ReserveTokens     int `yaml:"reserve_tokens" json:"reserve_tokens"`
@@ -201,6 +202,7 @@ func Defaults() Config {
 			MaxTurns:          100,
 			MaxParallelTools:  8,
 			MaxSubagents:      8,
+			MaxSubagentDepth:  4,
 			EventBuffer:       128,
 			MaxContextTokens:  120_000,
 			ReserveTokens:     8_000,
@@ -334,12 +336,8 @@ func (config Config) validateCore() error {
 	if _, _, err := net.SplitHostPort(config.Server.Address); err != nil {
 		return fmt.Errorf("%w: server.address: %w", ErrInvalid, err)
 	}
-	if config.Runtime.MaxTurns <= 0 || config.Runtime.MaxParallelTools <= 0 ||
-		config.Runtime.MaxSubagents <= 0 || config.Runtime.EventBuffer <= 0 ||
-		config.Runtime.MaxContextTokens <= 0 || config.Runtime.ReserveTokens < 0 ||
-		config.Runtime.ReserveTokens >= config.Runtime.MaxContextTokens ||
-		config.Runtime.MinRecentMessages <= 0 || config.Runtime.MaxSummaryChars <= 0 {
-		return fmt.Errorf("%w: runtime limits must be positive", ErrInvalid)
+	if err := validateRuntime(config.Runtime); err != nil {
+		return err
 	}
 	if !oneOf(config.Storage.Driver, "memory", "sqlite", "postgres") {
 		return fmt.Errorf("%w: unsupported storage.driver %q", ErrInvalid, config.Storage.Driver)
@@ -350,6 +348,17 @@ func (config Config) validateCore() error {
 	if strings.TrimSpace(config.Workspace.Root) == "" || config.Workspace.MaxReadBytes <= 0 ||
 		config.Workspace.MaxWriteBytes <= 0 || config.Workspace.MaxUploadBytes <= 0 {
 		return fmt.Errorf("%w: workspace root and size limits are required", ErrInvalid)
+	}
+	return nil
+}
+
+func validateRuntime(runtime RuntimeConfig) error {
+	if runtime.MaxTurns <= 0 || runtime.MaxParallelTools <= 0 ||
+		runtime.MaxSubagents <= 0 || runtime.MaxSubagentDepth <= 0 ||
+		runtime.EventBuffer <= 0 || runtime.MaxContextTokens <= 0 ||
+		runtime.ReserveTokens < 0 || runtime.ReserveTokens >= runtime.MaxContextTokens ||
+		runtime.MinRecentMessages <= 0 || runtime.MaxSummaryChars <= 0 {
+		return fmt.Errorf("%w: runtime limits must be positive", ErrInvalid)
 	}
 	return nil
 }

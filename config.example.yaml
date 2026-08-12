@@ -8,6 +8,7 @@ runtime:
   max_turns: 100
   max_parallel_tools: 8
   max_subagents: 8
+  max_subagent_depth: 4
   event_buffer: 128
   max_context_tokens: 120000
   reserve_tokens: 8000

@@ -32,6 +32,10 @@ Optional agent extensions are initialized before the listener becomes ready:
 - The runtime estimates prompt size before every model turn and uses the active
   model to summarize older, tool-safe message groups when the configured
   context budget is exceeded.
+- `subagent_spawn` starts bounded parallel child agents. Each child gets an
+  isolated run journal and tool registry while sharing only the parent's
+  policy-controlled workspace, configured extensions, and tenant scope. The
+  parent can inspect, wait for, list, or cancel child work explicitly.
 
 Create a thread and launch a run:
 
