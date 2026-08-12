@@ -37,7 +37,11 @@ Memory entries always require a user scope and may refine it with thread and
 agent identifiers. Retrieval includes user-wide entries plus matching narrower
 entries, but never data from another user or a different refinement. Results
 are bounded, deterministic, expiration-aware, and ranked by query terms and
-tags. Recalled text is inserted as explicitly untrusted context data.
+tags. Recalled text is inserted as explicitly untrusted context data. The
+service selects a SQLite/PostgreSQL adapter automatically; HTTP fact management
+operates on the authenticated user's global scope, while run tools retain their
+thread refinement. Scope imports replace atomically and cannot reuse an
+identifier owned by another scope.
 
 ## Context compaction
 

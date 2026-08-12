@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -30,7 +31,7 @@ func (tools Tools) Register(registry *tool.Registry) error {
 		tools.Now = time.Now
 	}
 	if tools.NewID == nil {
-		tools.NewID = newMemoryID
+		tools.NewID = NewID
 	}
 	return registry.RegisterAll(tools.searchTool(), tools.upsertTool(), tools.deleteTool())
 }
@@ -66,11 +67,13 @@ func (tools Tools) searchTool() tool.Tool {
 }
 
 func (tools Tools) upsertTool() tool.Tool {
-	return tools.function("memory_upsert", "Create or replace a durable memory in the authenticated scope.", `{"type":"object","properties":{"id":{"type":"string","maxLength":128},"text":{"type":"string","minLength":1,"maxLength":65536},"tags":{"type":"array","maxItems":32,"items":{"type":"string"}},"source":{"type":"string","maxLength":1024},"ttl_seconds":{"type":"integer","minimum":0,"maximum":31536000}},"required":["text"],"additionalProperties":false}`, false, func(ctx context.Context, raw json.RawMessage) (any, error) {
+	return tools.function("memory_upsert", "Create or replace a durable memory in the authenticated scope.", `{"type":"object","properties":{"id":{"type":"string","maxLength":128},"text":{"type":"string","minLength":1,"maxLength":65536},"tags":{"type":"array","maxItems":32,"items":{"type":"string"}},"category":{"type":"string","maxLength":128},"confidence":{"type":"number","minimum":0,"maximum":1},"source":{"type":"string","maxLength":1024},"ttl_seconds":{"type":"integer","minimum":0,"maximum":31536000}},"required":["text"],"additionalProperties":false}`, false, func(ctx context.Context, raw json.RawMessage) (any, error) {
 		var input struct {
 			ID         string   `json:"id"`
 			Text       string   `json:"text"`
 			Tags       []string `json:"tags"`
+			Category   string   `json:"category"`
+			Confidence *float64 `json:"confidence"`
 			Source     string   `json:"source"`
 			TTLSeconds int      `json:"ttl_seconds"`
 		}
@@ -89,7 +92,20 @@ func (tools Tools) upsertTool() tool.Tool {
 			return nil, err
 		}
 		now := tools.Now().UTC()
-		entry := Entry{ID: input.ID, Scope: scope, Text: input.Text, Tags: input.Tags, Source: input.Source, CreatedAt: now, UpdatedAt: now}
+		createdAt := now
+		if existing, getErr := tools.Store.Get(ctx, scope, input.ID); getErr == nil {
+			createdAt = existing.CreatedAt
+		} else if getErr != nil && !errors.Is(getErr, ErrNotFound) {
+			return nil, getErr
+		}
+		if strings.TrimSpace(input.Category) == "" {
+			input.Category = "context"
+		}
+		confidence := 0.5
+		if input.Confidence != nil {
+			confidence = *input.Confidence
+		}
+		entry := Entry{ID: input.ID, Scope: scope, Text: input.Text, Tags: input.Tags, Category: input.Category, Confidence: confidence, Source: input.Source, CreatedAt: createdAt, UpdatedAt: now}
 		if input.TTLSeconds > 0 {
 			entry.ExpiresAt = now.Add(time.Duration(input.TTLSeconds) * time.Second)
 		}
@@ -127,7 +143,8 @@ func (tools Tools) function(name, description, schema string, readOnly bool, exe
 	}}
 }
 
-func newMemoryID() (string, error) {
+// NewID creates one cryptographically random memory identifier.
+func NewID() (string, error) {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return "", fmt.Errorf("create memory id: %w", err)

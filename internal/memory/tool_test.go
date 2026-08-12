@@ -25,7 +25,19 @@ func TestMemoryToolsLifecycle(t *testing.T) {
 	if result.IsError || string(result.Output) == "" {
 		t.Fatalf("upsert = %#v", result)
 	}
-	matches := executeMemoryTool(t, registry, "memory_search", `{"query":"Go","limit":5}`)
+	created, err := store.Get(context.Background(), scope, "generated")
+	if err != nil || created.Category != "context" || created.Confidence != 0.5 {
+		t.Fatalf("created = %#v, %v", created, err)
+	}
+	updated := executeMemoryTool(t, registry, "memory_upsert", `{"id":"generated","text":"Updated","confidence":0.9}`)
+	if updated.IsError {
+		t.Fatalf("update = %s", updated.Output)
+	}
+	after, _ := store.Get(context.Background(), scope, "generated")
+	if !after.CreatedAt.Equal(created.CreatedAt) || after.Confidence != 0.9 {
+		t.Fatalf("updated entry = %#v", after)
+	}
+	matches := executeMemoryTool(t, registry, "memory_search", `{"query":"Updated","limit":5}`)
 	var found []Match
 	if err := json.Unmarshal(matches.Output, &found); err != nil || len(found) != 1 || found[0].Entry.ID != "generated" {
 		t.Fatalf("search = %#v, %v", found, err)
@@ -59,7 +71,7 @@ func TestMemoryToolsFailures(t *testing.T) {
 			t.Fatalf("%s = %#v", test.name, result)
 		}
 	}
-	if _, err := newMemoryID(); err != nil {
+	if _, err := NewID(); err != nil {
 		t.Fatal(err)
 	}
 }

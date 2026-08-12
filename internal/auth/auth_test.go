@@ -114,6 +114,9 @@ func TestGatewayPolicyResourceRoutes(t *testing.T) {
 		{http.MethodPost, "/api/skills/demo/enable", ResourcesWrite},
 		{http.MethodPost, "/api/threads/x/uploads", ResourcesWrite},
 		{http.MethodGet, "/api/threads/x/artifacts/mnt/user-data/outputs/x", ResourcesRead},
+		{http.MethodGet, "/api/memory", MemoryRead},
+		{http.MethodPost, "/api/memory/facts", MemoryWrite},
+		{http.MethodGet, "/api/memory-extra", Admin},
 	} {
 		request := httptest.NewRequestWithContext(context.Background(), test.method, test.path, nil)
 		permission, public := GatewayPolicy(request)

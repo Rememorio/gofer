@@ -45,6 +45,10 @@ const (
 	ResourcesRead Permission = "resources:read"
 	// ResourcesWrite permits skill state changes and file uploads or deletion.
 	ResourcesWrite Permission = "resources:write"
+	// MemoryRead permits reading and exporting the authenticated user's memory.
+	MemoryRead Permission = "memory:read"
+	// MemoryWrite permits creating, importing, changing, and clearing memory.
+	MemoryWrite Permission = "memory:write"
 )
 
 // Principal is an authenticated identity with bounded permissions.
@@ -209,6 +213,12 @@ func resourcePermission(request *http.Request) (Permission, bool) {
 			return ScheduledRead, true
 		}
 		return ScheduledWrite, true
+	}
+	if path == "/api/memory" || strings.HasPrefix(path, "/api/memory/") {
+		if request.Method == http.MethodGet {
+			return MemoryRead, true
+		}
+		return MemoryWrite, true
 	}
 	return "", false
 }

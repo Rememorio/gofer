@@ -27,14 +27,16 @@ type Scope struct {
 
 // Entry is one durable long-term memory.
 type Entry struct {
-	ID        string    `json:"id"`
-	Scope     Scope     `json:"scope"`
-	Text      string    `json:"text"`
-	Tags      []string  `json:"tags,omitempty"`
-	Source    string    `json:"source,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	ExpiresAt time.Time `json:"expires_at,omitempty"`
+	ID         string    `json:"id"`
+	Scope      Scope     `json:"scope"`
+	Text       string    `json:"text"`
+	Tags       []string  `json:"tags,omitempty"`
+	Category   string    `json:"category,omitempty"`
+	Confidence float64   `json:"confidence,omitempty"`
+	Source     string    `json:"source,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	ExpiresAt  time.Time `json:"expires_at,omitempty"`
 }
 
 // Query controls scoped lexical retrieval.
@@ -55,7 +57,10 @@ type Match struct {
 // Store is the replaceable durable memory contract.
 type Store interface {
 	Upsert(context.Context, Entry) error
+	Get(context.Context, Scope, string) (Entry, error)
 	Delete(context.Context, Scope, string) error
+	Clear(context.Context, Scope) error
+	Replace(context.Context, Scope, []Entry) error
 	Search(context.Context, Query) ([]Match, error)
 }
 
@@ -85,6 +90,23 @@ func (store *InMemory) Upsert(ctx context.Context, entry Entry) error {
 	return nil
 }
 
+// Get returns one isolated entry only when its complete scope matches.
+func (store *InMemory) Get(ctx context.Context, scope Scope, id string) (Entry, error) {
+	if err := ctx.Err(); err != nil {
+		return Entry{}, err
+	}
+	if err := scope.Validate(); err != nil {
+		return Entry{}, err
+	}
+	store.mu.RLock()
+	entry, exists := store.entries[id]
+	store.mu.RUnlock()
+	if !exists || entry.Scope != scope {
+		return Entry{}, ErrNotFound
+	}
+	return cloneEntry(entry), nil
+}
+
 // Delete removes an entry only when its complete scope matches.
 func (store *InMemory) Delete(ctx context.Context, scope Scope, id string) error {
 	if err := ctx.Err(); err != nil {
@@ -103,31 +125,82 @@ func (store *InMemory) Delete(ctx context.Context, scope Scope, id string) error
 	return nil
 }
 
+// Clear removes every entry in one exact scope without affecting refinements.
+func (store *InMemory) Clear(ctx context.Context, scope Scope) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := scope.Validate(); err != nil {
+		return err
+	}
+	store.mu.Lock()
+	for id, entry := range store.entries {
+		if entry.Scope == scope {
+			delete(store.entries, id)
+		}
+	}
+	store.mu.Unlock()
+	return nil
+}
+
+// Replace atomically replaces every entry in one exact scope.
+func (store *InMemory) Replace(ctx context.Context, scope Scope, entries []Entry) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := ValidateReplacement(scope, entries); err != nil {
+		return err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for _, entry := range entries {
+		if current, exists := store.entries[entry.ID]; exists && current.Scope != scope {
+			return fmt.Errorf("%w: identifier belongs to another scope", ErrInvalid)
+		}
+	}
+	for id, entry := range store.entries {
+		if entry.Scope == scope {
+			delete(store.entries, id)
+		}
+	}
+	for _, entry := range entries {
+		store.entries[entry.ID] = cloneEntry(entry)
+	}
+	return nil
+}
+
 // Search returns stable score, recency, then identifier order.
 func (store *InMemory) Search(ctx context.Context, query Query) ([]Match, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	store.mu.RLock()
+	entries := make([]Entry, 0, len(store.entries))
+	for _, entry := range store.entries {
+		entries = append(entries, cloneEntry(entry))
+	}
+	store.mu.RUnlock()
+	return Rank(query, entries)
+}
+
+// Rank filters and deterministically ranks entries for a validated query.
+func Rank(query Query, entries []Entry) ([]Match, error) {
 	if err := query.Validate(); err != nil {
 		return nil, err
 	}
 	terms := words(query.Text)
 	tags := normalizedSet(query.Tags)
-	store.mu.RLock()
-	matches := make([]Match, 0)
-	for _, entry := range store.entries {
+	matches := make([]Match, 0, len(entries))
+	for _, entry := range entries {
 		if !scopeIncludes(query.Scope, entry.Scope) || (!entry.ExpiresAt.IsZero() && !entry.ExpiresAt.After(query.Now)) {
 			continue
 		}
 		score := scoreEntry(entry, terms, tags)
-		if len(terms) != 0 || len(tags) != 0 {
-			if score == 0 {
-				continue
-			}
+		if (len(terms) != 0 || len(tags) != 0) && score == 0 {
+			continue
 		}
 		matches = append(matches, Match{Entry: cloneEntry(entry), Score: score})
 	}
-	store.mu.RUnlock()
 	sort.Slice(matches, func(left, right int) bool {
 		if matches[left].Score != matches[right].Score {
 			return matches[left].Score > matches[right].Score
@@ -160,10 +233,34 @@ func (entry Entry) Validate() error {
 	if len(entry.Tags) > 32 {
 		return fmt.Errorf("%w: too many tags", ErrInvalid)
 	}
+	if len(entry.Category) > 128 || len(entry.Source) > 1024 || entry.Confidence < 0 || entry.Confidence > 1 {
+		return fmt.Errorf("%w: invalid metadata", ErrInvalid)
+	}
 	for _, tag := range entry.Tags {
 		if strings.TrimSpace(tag) == "" || len(tag) > 64 {
 			return fmt.Errorf("%w: invalid tag", ErrInvalid)
 		}
+	}
+	return nil
+}
+
+// ValidateReplacement verifies an exact-scope, duplicate-free import batch.
+func ValidateReplacement(scope Scope, entries []Entry) error {
+	if err := scope.Validate(); err != nil {
+		return err
+	}
+	seen := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		if entry.Scope != scope {
+			return fmt.Errorf("%w: replacement scope mismatch", ErrInvalid)
+		}
+		if err := entry.Validate(); err != nil {
+			return err
+		}
+		if _, exists := seen[entry.ID]; exists {
+			return fmt.Errorf("%w: duplicate identifier", ErrInvalid)
+		}
+		seen[entry.ID] = struct{}{}
 	}
 	return nil
 }

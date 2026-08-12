@@ -38,7 +38,9 @@ The `gofer serve` command now assembles the model provider, durable store,
 isolated workspaces, sandbox, browser, policy, runtime, gateway, graceful
 shutdown, and Prometheus endpoint into a runnable service. MCP tools, projected
 skills, scoped memory recall and editing, and model-backed context compaction
-are wired into every run when enabled. Service control primitives include
+are wired into every run when enabled. Long-term memory uses the configured
+SQLite/PostgreSQL store, supports atomic import/export and owner-scoped fact
+management, and survives service restarts. Service control primitives include
 digest-only bearer credentials and RBAC, persistent leased cron/one-shot
 scheduling with an authenticated management API, channel normalization,
 dependency-ordered extensions, and bounded-cardinality Prometheus metrics.

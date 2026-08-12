@@ -31,6 +31,9 @@ store interface, so transport code does not own model or database behavior.
 - Goal and todo endpoints operate on the same compare-and-swap state used by
   agent control tools. SQLite and PostgreSQL persist each version and reject
   stale writers.
+- Memory CRUD, status, reload, and import/export endpoints share the scoped
+  store used by agent recall and tools. Atomic imports and exact-scope updates
+  prevent cross-user or cross-thread replacement.
 
 The gateway reserves the `user_id` metadata key for its authenticated owner.
 It is never accepted from or returned to clients. Every thread, run, event,

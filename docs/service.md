@@ -27,8 +27,9 @@ Optional agent extensions are initialized before the listener becomes ready:
   atomically registers its namespaced tools. Startup fails if discovery is
   unsafe or incomplete.
 - `memory.enabled` provides user-and-thread-scoped recall plus explicit search,
-  upsert, and delete tools. Authenticated runs use the bearer principal as the
-  user boundary; local unauthenticated runs use the `local` scope.
+  upsert, and delete tools backed by the configured durable SQL store.
+  Authenticated runs use the bearer principal as the user boundary; local
+  unauthenticated runs use the `local` scope.
 - The runtime estimates prompt size before every model turn and uses the active
   model to summarize older, tool-safe message groups when the configured
   context budget is exceeded.
@@ -133,6 +134,28 @@ resource includes the optimistic version and ordered todos. HTTP mutations are
 rejected while a run is non-terminal, and SQL stores recover the same state
 after restart. These routes use the existing `threads:read` and
 `threads:write` permissions.
+
+User-global memory facts use DeerFlow-shaped camel-case responses and atomic
+scope replacement for imports:
+
+```text
+GET    /api/memory
+POST   /api/memory/reload
+DELETE /api/memory
+POST   /api/memory/facts
+PATCH  /api/memory/facts/{fact_id}
+DELETE /api/memory/facts/{fact_id}
+GET    /api/memory/export
+POST   /api/memory/import
+GET    /api/memory/config
+GET    /api/memory/status
+```
+
+Search parameters `q`, comma-separated `tags`, and `limit` are additive.
+SQLite and PostgreSQL retain facts, topics, confidence, expiry, source, and
+scope across restarts. Import validates the complete batch before replacing
+the authenticated user's global scope. Reads require `memory:read`; mutations
+require `memory:write`.
 
 SSE sequence numbers are emitted as event IDs; clients may reconnect with
 `Last-Event-ID`. Health is public at `/healthz`. Prometheus text exposition is

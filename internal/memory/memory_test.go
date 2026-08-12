@@ -70,6 +70,15 @@ func TestInMemoryValidationConflictsAndCancellation(t *testing.T) {
 	if err := store.Delete(cancelled, valid.Scope, valid.ID); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Delete(cancel) = %v", err)
 	}
+	if _, err := store.Get(cancelled, valid.Scope, valid.ID); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Get(cancel) = %v", err)
+	}
+	if err := store.Clear(cancelled, valid.Scope); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Clear(cancel) = %v", err)
+	}
+	if err := store.Replace(cancelled, valid.Scope, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Replace(cancel) = %v", err)
+	}
 	if _, err := store.Search(cancelled, Query{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Search(cancel) = %v", err)
 	}
@@ -79,6 +88,8 @@ func TestInMemoryValidationConflictsAndCancellation(t *testing.T) {
 		{ID: "x", Scope: valid.Scope, Text: "x", CreatedAt: now, UpdatedAt: now, ExpiresAt: now},
 		{ID: "x", Scope: valid.Scope, Text: "x", Tags: make([]string, 33), CreatedAt: now, UpdatedAt: now},
 		{ID: "x", Scope: valid.Scope, Text: "x", Tags: []string{""}, CreatedAt: now, UpdatedAt: now},
+		{ID: "x", Scope: valid.Scope, Text: "x", Confidence: 2, CreatedAt: now, UpdatedAt: now},
+		{ID: "x", Scope: valid.Scope, Text: "x", Category: strings.Repeat("c", 129), CreatedAt: now, UpdatedAt: now},
 	}
 	for _, entry := range invalids {
 		if err := entry.Validate(); !errors.Is(err, ErrInvalid) {
@@ -87,6 +98,61 @@ func TestInMemoryValidationConflictsAndCancellation(t *testing.T) {
 	}
 	if err := (Query{Scope: valid.Scope, Limit: 0, Now: now}).Validate(); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Query.Validate() = %v", err)
+	}
+}
+
+func TestInMemoryGetClearAndAtomicReplace(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	store := NewInMemory()
+	global := Scope{UserID: "u"}
+	thread := Scope{UserID: "u", ThreadID: "t"}
+	entries := []Entry{
+		{ID: "global", Scope: global, Text: "global", CreatedAt: now, UpdatedAt: now},
+		{ID: "thread", Scope: thread, Text: "thread", CreatedAt: now, UpdatedAt: now},
+	}
+	for _, entry := range entries {
+		if err := store.Upsert(ctx, entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := store.Get(ctx, global, "global")
+	if err != nil || got.Text != "global" {
+		t.Fatalf("Get() = %#v, %v", got, err)
+	}
+	if _, err = store.Get(ctx, thread, "global"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get(other scope) = %v", err)
+	}
+	replacement := []Entry{{ID: "next", Scope: global, Text: "next", CreatedAt: now, UpdatedAt: now}}
+	if err = store.Replace(ctx, global, replacement); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Get(ctx, global, "global"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("old global = %v", err)
+	}
+	if _, err = store.Get(ctx, thread, "thread"); err != nil {
+		t.Fatalf("thread removed: %v", err)
+	}
+	invalid := []Entry{{ID: "thread", Scope: global, Text: "collision", CreatedAt: now, UpdatedAt: now}}
+	if err = store.Replace(ctx, global, invalid); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Replace(collision) = %v", err)
+	}
+	if _, err = store.Get(ctx, global, "next"); err != nil {
+		t.Fatalf("failed replace was not atomic: %v", err)
+	}
+	if err = store.Clear(ctx, global); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Get(ctx, global, "next"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cleared entry = %v", err)
+	}
+	if err = ValidateReplacement(global, []Entry{replacement[0], replacement[0]}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("duplicate replacement = %v", err)
+	}
+	replacement[0].Scope = thread
+	if err = ValidateReplacement(global, replacement); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("scope replacement = %v", err)
 	}
 }
 

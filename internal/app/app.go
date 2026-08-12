@@ -146,6 +146,9 @@ func (service *Service) open() error {
 func (service *Service) openAgentExtensions() error {
 	if service.config.Memory.Enabled {
 		service.memories = memory.NewInMemory()
+		if provider, ok := service.store.(interface{ MemoryState() memory.Store }); ok {
+			service.memories = provider.MemoryState()
+		}
 	}
 	if service.config.Skills.Enabled {
 		var state skill.StateStore
@@ -283,6 +286,7 @@ func (service *Service) openHandler() error {
 	service.schedulerRoutes(apiMux)
 	service.resourceRoutes(apiMux)
 	service.controlRoutes(apiMux)
+	service.memoryRoutes(apiMux)
 	var api http.Handler = apiMux
 	if service.config.Auth.Enabled {
 		authenticator, authErr := buildAuthenticator(service.config.Auth)

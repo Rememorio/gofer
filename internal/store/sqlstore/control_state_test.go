@@ -33,6 +33,12 @@ func TestSQLiteControlStatePersistsAndComparesVersions(t *testing.T) {
 	if _, err = stateStore.CompareAndSwap(ctx, next, 0); !errors.Is(err, control.ErrConflict) {
 		t.Fatalf("stale CompareAndSwap() = %v", err)
 	}
+	next = saved
+	next.UpdatedAt = now.Add(time.Second)
+	updated, err := stateStore.CompareAndSwap(ctx, next, saved.Version)
+	if err != nil || updated.Version != 2 {
+		t.Fatalf("update CompareAndSwap() = %#v, %v", updated, err)
+	}
 	_ = database.Close()
 	database, err = Open(ctx, Config{Driver: SQLite, DSN: dsn})
 	if err != nil {
@@ -41,7 +47,7 @@ func TestSQLiteControlStatePersistsAndComparesVersions(t *testing.T) {
 	defer func() { _ = database.Close() }()
 	stateStore = database.ControlState()
 	loaded, err := stateStore.Load(ctx, thread.ID)
-	if err != nil || loaded.Version != 1 || loaded.Goal == nil || loaded.Goal.Objective != "ship" {
+	if err != nil || loaded.Version != 2 || loaded.Goal == nil || loaded.Goal.Objective != "ship" {
 		t.Fatalf("Load() = %#v, %v", loaded, err)
 	}
 	if err = stateStore.Delete(ctx, thread.ID); err != nil {
