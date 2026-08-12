@@ -1,0 +1,512 @@
+package runtime
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/Rememorio/gofer/internal/domain"
+	"github.com/Rememorio/gofer/internal/event"
+	"github.com/Rememorio/gofer/internal/model"
+	"github.com/Rememorio/gofer/internal/store"
+	"github.com/Rememorio/gofer/internal/tool"
+)
+
+func TestRunnerCompletesTextTurn(t *testing.T) {
+	t.Parallel()
+
+	fixture := newFixture(t, [][]model.Chunk{{
+		{Kind: model.ChunkTextDelta, Text: "hel"},
+		{Kind: model.ChunkTextDelta, Text: "lo"},
+		{Kind: model.ChunkUsage, Usage: &model.Usage{InputTokens: 3, OutputTokens: 2}},
+		{Kind: model.ChunkDone, StopReason: model.StopEndTurn},
+	}}, nil)
+	result, err := fixture.runner.Run(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("Run(): %v", err)
+	}
+	if result.Run.Status != domain.RunSucceeded || result.Turns != 1 || result.Usage.InputTokens != 3 {
+		t.Fatalf("Result = %#v", result)
+	}
+	if len(result.Messages) != 2 || result.Messages[1].Content[0].Text != "hello" {
+		t.Fatalf("Messages = %#v", result.Messages)
+	}
+	wantKinds := []event.Kind{
+		event.RunStarted, event.MessageStarted, event.MessageDelta,
+		event.MessageDelta, event.MessageCompleted, event.RunCompleted,
+	}
+	assertEventKinds(t, fixture.store, fixture.run.ID, wantKinds)
+}
+
+func TestRunnerExecutesToolLoop(t *testing.T) {
+	t.Parallel()
+
+	call := domain.ToolCall{ID: "call-1", Name: "echo", Arguments: json.RawMessage(`{"text":"hello"}`)}
+	registry := tool.NewRegistry()
+	if err := registry.Register(echoTool(nil)); err != nil {
+		t.Fatalf("Register(): %v", err)
+	}
+	fixture := newFixture(t, [][]model.Chunk{
+		{{Kind: model.ChunkToolCall, ToolCall: &call}, {Kind: model.ChunkDone, StopReason: model.StopToolUse}},
+		{{Kind: model.ChunkTextDelta, Text: "done"}, {Kind: model.ChunkDone, StopReason: model.StopEndTurn}},
+	}, registry)
+	result, err := fixture.runner.Run(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("Run(): %v", err)
+	}
+	if result.Turns != 2 || len(result.Messages) != 4 {
+		t.Fatalf("Result = %#v", result)
+	}
+	toolMessage := result.Messages[2]
+	if toolMessage.Role != domain.RoleTool || toolMessage.Content[0].ToolResult.IsError {
+		t.Fatalf("tool message = %#v", toolMessage)
+	}
+	if len(fixture.provider.Requests) != 2 || len(fixture.provider.Requests[1].Messages) != 3 {
+		t.Fatalf("provider requests = %#v", fixture.provider.Requests)
+	}
+	assertEventKinds(t, fixture.store, fixture.run.ID, []event.Kind{
+		event.RunStarted, event.MessageStarted, event.MessageCompleted,
+		event.ToolStarted, event.ToolCompleted,
+		event.MessageStarted, event.MessageDelta, event.MessageCompleted, event.RunCompleted,
+	})
+}
+
+func TestRunnerRunsToolsInParallel(t *testing.T) {
+	t.Parallel()
+
+	var active atomic.Int32
+	var maximum atomic.Int32
+	registry := tool.NewRegistry()
+	if err := registry.Register(echoTool(func() {
+		current := active.Add(1)
+		for {
+			observed := maximum.Load()
+			if current <= observed || maximum.CompareAndSwap(observed, current) {
+				break
+			}
+		}
+		time.Sleep(40 * time.Millisecond)
+		active.Add(-1)
+	})); err != nil {
+		t.Fatalf("Register(): %v", err)
+	}
+	first := domain.ToolCall{ID: "1", Name: "echo", Arguments: json.RawMessage(`{"text":"one"}`)}
+	second := domain.ToolCall{ID: "2", Name: "echo", Arguments: json.RawMessage(`{"text":"two"}`)}
+	fixture := newFixture(t, [][]model.Chunk{
+		{{Kind: model.ChunkToolCall, ToolCall: &first}, {Kind: model.ChunkToolCall, ToolCall: &second}, {Kind: model.ChunkDone, StopReason: model.StopToolUse}},
+		{{Kind: model.ChunkTextDelta, Text: "done"}, {Kind: model.ChunkDone, StopReason: model.StopEndTurn}},
+	}, registry)
+	if _, err := fixture.runner.Run(context.Background(), fixture.request); err != nil {
+		t.Fatalf("Run(): %v", err)
+	}
+	if maximum.Load() != 2 {
+		t.Fatalf("maximum concurrent tools = %d, want 2", maximum.Load())
+	}
+}
+
+func TestRunnerReturnsToolFailuresToModel(t *testing.T) {
+	t.Parallel()
+
+	call := domain.ToolCall{ID: "call-1", Name: "missing", Arguments: json.RawMessage(`{}`)}
+	fixture := newFixture(t, [][]model.Chunk{
+		{{Kind: model.ChunkToolCall, ToolCall: &call}, {Kind: model.ChunkDone, StopReason: model.StopToolUse}},
+		{{Kind: model.ChunkTextDelta, Text: "recovered"}, {Kind: model.ChunkDone, StopReason: model.StopEndTurn}},
+	}, nil)
+	result, err := fixture.runner.Run(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("Run(): %v", err)
+	}
+	if !result.Messages[2].Content[0].ToolResult.IsError {
+		t.Fatalf("tool result = %#v, want error", result.Messages[2])
+	}
+	assertContainsEvent(t, fixture.store, fixture.run.ID, event.ToolFailed)
+}
+
+func TestRunnerMiddlewareLifecycleAndDenial(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	registry := tool.NewRegistry()
+	if err := registry.Register(echoTool(func() { calls.Add(1) })); err != nil {
+		t.Fatalf("Register(): %v", err)
+	}
+	call := domain.ToolCall{ID: "call-1", Name: "echo", Arguments: json.RawMessage(`{"text":"x"}`)}
+	recorder := &recordingMiddleware{denyTool: true}
+	fixture := newFixtureWithMiddleware(t, [][]model.Chunk{
+		{{Kind: model.ChunkToolCall, ToolCall: &call}, {Kind: model.ChunkDone, StopReason: model.StopToolUse}},
+		{{Kind: model.ChunkTextDelta, Text: "done"}, {Kind: model.ChunkDone, StopReason: model.StopEndTurn}},
+	}, registry, []Middleware{recorder})
+	result, err := fixture.runner.Run(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("Run(): %v", err)
+	}
+	if calls.Load() != 0 || !result.Messages[2].Content[0].ToolResult.IsError {
+		t.Fatalf("tool calls = %d, result = %#v", calls.Load(), result.Messages[2])
+	}
+	want := []string{"before_model", "after_model", "before_tool", "after_tool", "before_model", "after_model"}
+	if got := recorder.events(); !equalStrings(got, want) {
+		t.Fatalf("middleware events = %#v, want %#v", got, want)
+	}
+}
+
+func TestRunnerPersistsToolOutcomeBeforeAfterMiddleware(t *testing.T) {
+	t.Parallel()
+
+	registry := tool.NewRegistry()
+	if err := registry.Register(echoTool(nil)); err != nil {
+		t.Fatalf("Register(): %v", err)
+	}
+	call := domain.ToolCall{ID: "call-1", Name: "echo", Arguments: json.RawMessage(`{"text":"x"}`)}
+	fixture := newFixtureWithMiddleware(t, [][]model.Chunk{{
+		{Kind: model.ChunkToolCall, ToolCall: &call},
+		{Kind: model.ChunkDone, StopReason: model.StopToolUse},
+	}}, registry, []Middleware{failingAfterToolMiddleware{}})
+	if _, err := fixture.runner.Run(context.Background(), fixture.request); err == nil {
+		t.Fatal("Run() error = nil")
+	}
+	assertRunStatus(t, fixture.store, fixture.run.ID, domain.RunFailed)
+	assertContainsEvent(t, fixture.store, fixture.run.ID, event.ToolCompleted)
+}
+
+func TestNopMiddleware(t *testing.T) {
+	t.Parallel()
+
+	middleware := NopMiddleware{}
+	ctx := context.Background()
+	if err := middleware.BeforeModel(ctx, &model.Request{}); err != nil {
+		t.Fatalf("BeforeModel(): %v", err)
+	}
+	if err := middleware.AfterModel(ctx, model.Response{}); err != nil {
+		t.Fatalf("AfterModel(): %v", err)
+	}
+	if err := middleware.BeforeTool(ctx, domain.ToolCall{}); err != nil {
+		t.Fatalf("BeforeTool(): %v", err)
+	}
+	if err := middleware.AfterTool(ctx, domain.ToolCall{}, domain.ToolResult{}); err != nil {
+		t.Fatalf("AfterTool(): %v", err)
+	}
+}
+
+func TestRunnerFailsAtTurnLimit(t *testing.T) {
+	t.Parallel()
+
+	call := domain.ToolCall{ID: "1", Name: "missing", Arguments: json.RawMessage(`{}`)}
+	fixture := newFixture(t, [][]model.Chunk{{
+		{Kind: model.ChunkToolCall, ToolCall: &call},
+		{Kind: model.ChunkDone, StopReason: model.StopToolUse},
+	}}, nil)
+	fixture.runner.maxTurns = 1
+	_, err := fixture.runner.Run(context.Background(), fixture.request)
+	if !errors.Is(err, ErrTurnLimit) {
+		t.Fatalf("Run() error = %v, want ErrTurnLimit", err)
+	}
+	assertRunStatus(t, fixture.store, fixture.run.ID, domain.RunFailed)
+	assertContainsEvent(t, fixture.store, fixture.run.ID, event.RunFailed)
+}
+
+func TestRunnerPersistsProviderFailure(t *testing.T) {
+	t.Parallel()
+
+	fixture := newFixture(t, nil, nil)
+	fixture.provider.Err = errors.New("provider unavailable")
+	_, err := fixture.runner.Run(context.Background(), fixture.request)
+	if err == nil {
+		t.Fatal("Run() error = nil")
+	}
+	assertRunStatus(t, fixture.store, fixture.run.ID, domain.RunFailed)
+	assertContainsEvent(t, fixture.store, fixture.run.ID, event.RunFailed)
+}
+
+func TestRunnerPersistsCancellation(t *testing.T) {
+	t.Parallel()
+
+	fixture := newFixture(t, nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	fixture.runner.provider = blockingProvider{ctx: ctx}
+	done := make(chan error, 1)
+	go func() {
+		_, err := fixture.runner.Run(ctx, fixture.request)
+		done <- err
+	}()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run() did not stop after cancellation")
+	}
+	assertRunStatus(t, fixture.store, fixture.run.ID, domain.RunCancelled)
+	assertContainsEvent(t, fixture.store, fixture.run.ID, event.RunCancelled)
+}
+
+func TestRunnerRejectsProtocolFailures(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		chunks []model.Chunk
+		want   error
+	}{
+		{name: "truncated", chunks: []model.Chunk{{Kind: model.ChunkTextDelta, Text: "partial"}, {Kind: model.ChunkDone, StopReason: model.StopMaxTokens}}, want: ErrModelTruncated},
+		{name: "tool reason without calls", chunks: []model.Chunk{{Kind: model.ChunkTextDelta, Text: "x"}, {Kind: model.ChunkDone, StopReason: model.StopToolUse}}, want: ErrProtocol},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newFixture(t, [][]model.Chunk{test.chunks}, nil)
+			_, err := fixture.runner.Run(context.Background(), fixture.request)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("Run() error = %v, want %v", err, test.want)
+			}
+			assertRunStatus(t, fixture.store, fixture.run.ID, domain.RunFailed)
+		})
+	}
+}
+
+func TestRunnerResumesInterruptedRun(t *testing.T) {
+	t.Parallel()
+
+	fixture := newFixture(t, [][]model.Chunk{{
+		{Kind: model.ChunkTextDelta, Text: "resumed"},
+		{Kind: model.ChunkDone, StopReason: model.StopEndTurn},
+	}}, nil)
+	started, err := fixture.store.TransitionRun(context.Background(), fixture.run.ID, domain.RunPending, domain.RunRunning, time.Now(), "")
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	interrupted, err := fixture.store.TransitionRun(context.Background(), started.ID, domain.RunRunning, domain.RunInterrupted, time.Now(), "")
+	if err != nil {
+		t.Fatalf("interrupt run: %v", err)
+	}
+	fixture.run = interrupted
+	result, err := fixture.runner.Run(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatalf("Run(): %v", err)
+	}
+	if result.Run.Attempt != 2 {
+		t.Fatalf("attempt = %d, want 2", result.Run.Attempt)
+	}
+}
+
+func TestRunnerRejectsInvalidConstructionAndRunState(t *testing.T) {
+	t.Parallel()
+
+	if _, err := NewRunner(RunnerConfig{}); !errors.Is(err, ErrInvalidRunner) {
+		t.Fatalf("NewRunner() error = %v, want ErrInvalidRunner", err)
+	}
+	memory := store.NewMemory()
+	provider := &model.Scripted{}
+	if _, err := NewRunner(RunnerConfig{Store: memory, Provider: provider, MaxTurns: -1}); !errors.Is(err, ErrInvalidRunner) {
+		t.Fatalf("NewRunner(negative) error = %v, want ErrInvalidRunner", err)
+	}
+
+	fixture := newFixture(t, nil, nil)
+	started, err := fixture.store.TransitionRun(context.Background(), fixture.run.ID, domain.RunPending, domain.RunRunning, time.Now(), "")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	_, err = fixture.store.TransitionRun(context.Background(), started.ID, domain.RunRunning, domain.RunSucceeded, time.Now(), "")
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if _, err := fixture.runner.Run(context.Background(), fixture.request); !errors.Is(err, ErrNotRunnable) {
+		t.Fatalf("Run(terminal) error = %v, want ErrNotRunnable", err)
+	}
+	fixture.request.RunID, _ = domain.NewRunID()
+	if _, err := fixture.runner.Run(context.Background(), fixture.request); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Run(missing) error = %v, want ErrNotFound", err)
+	}
+}
+
+type fixture struct {
+	runner   *Runner
+	store    *store.Memory
+	provider *model.Scripted
+	run      domain.Run
+	request  Request
+}
+
+func newFixture(t *testing.T, responses [][]model.Chunk, registry *tool.Registry) fixture {
+	t.Helper()
+	return newFixtureWithMiddleware(t, responses, registry, nil)
+}
+
+func newFixtureWithMiddleware(t *testing.T, responses [][]model.Chunk, registry *tool.Registry, middleware []Middleware) fixture {
+	t.Helper()
+	memory := store.NewMemory()
+	now := time.Now().UTC()
+	thread, err := domain.NewThread(now)
+	if err != nil {
+		t.Fatalf("NewThread(): %v", err)
+	}
+	if err := memory.CreateThread(context.Background(), thread); err != nil {
+		t.Fatalf("CreateThread(): %v", err)
+	}
+	run, err := domain.NewRun(thread.ID, now)
+	if err != nil {
+		t.Fatalf("NewRun(): %v", err)
+	}
+	if err := memory.CreateRun(context.Background(), run); err != nil {
+		t.Fatalf("CreateRun(): %v", err)
+	}
+	message, err := domain.NewTextMessage(domain.RoleUser, "hello", now)
+	if err != nil {
+		t.Fatalf("NewTextMessage(): %v", err)
+	}
+	provider := &model.Scripted{Responses: responses}
+	runner, err := NewRunner(RunnerConfig{
+		Store: memory, Provider: provider, Tools: registry, Middleware: middleware,
+		MaxTurns: 4, MaxParallelTools: 2,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner(): %v", err)
+	}
+	return fixture{
+		runner: runner, store: memory, provider: provider, run: run,
+		request: Request{RunID: run.ID, Model: "test", Messages: []domain.Message{message}},
+	}
+}
+
+func echoTool(before func()) tool.Tool {
+	return tool.Func{
+		DefinitionValue: tool.Definition{
+			Name: "echo", Description: "Echo text",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}`),
+		},
+		ExecuteFunc: func(_ context.Context, arguments json.RawMessage) (json.RawMessage, error) {
+			if before != nil {
+				before()
+			}
+			return append(json.RawMessage(nil), arguments...), nil
+		},
+	}
+}
+
+func assertEventKinds(t *testing.T, memory *store.Memory, runID domain.RunID, want []event.Kind) {
+	t.Helper()
+	records, err := memory.Events(context.Background(), runID, 0, 0)
+	if err != nil {
+		t.Fatalf("Events(): %v", err)
+	}
+	got := make([]event.Kind, len(records))
+	for index, record := range records {
+		got[index] = record.Kind
+	}
+	if len(got) != len(want) {
+		t.Fatalf("event kinds = %#v, want %#v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("event kinds = %#v, want %#v", got, want)
+		}
+	}
+}
+
+func assertContainsEvent(t *testing.T, memory *store.Memory, runID domain.RunID, kind event.Kind) {
+	t.Helper()
+	records, err := memory.Events(context.Background(), runID, 0, 0)
+	if err != nil {
+		t.Fatalf("Events(): %v", err)
+	}
+	for _, record := range records {
+		if record.Kind == kind {
+			return
+		}
+	}
+	t.Fatalf("events do not contain %s: %#v", kind, records)
+}
+
+func assertRunStatus(t *testing.T, memory *store.Memory, runID domain.RunID, want domain.RunStatus) {
+	t.Helper()
+	run, err := memory.Run(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("Run(): %v", err)
+	}
+	if run.Status != want {
+		t.Fatalf("run status = %s, want %s", run.Status, want)
+	}
+}
+
+type recordingMiddleware struct {
+	NopMiddleware
+	mu       sync.Mutex
+	log      []string
+	denyTool bool
+}
+
+type failingAfterToolMiddleware struct{ NopMiddleware }
+
+func (failingAfterToolMiddleware) AfterTool(context.Context, domain.ToolCall, domain.ToolResult) error {
+	return errors.New("after tool failed")
+}
+
+func (middleware *recordingMiddleware) BeforeModel(context.Context, *model.Request) error {
+	middleware.record("before_model")
+	return nil
+}
+
+func (middleware *recordingMiddleware) AfterModel(context.Context, model.Response) error {
+	middleware.record("after_model")
+	return nil
+}
+
+func (middleware *recordingMiddleware) BeforeTool(context.Context, domain.ToolCall) error {
+	middleware.record("before_tool")
+	if middleware.denyTool {
+		return errors.New("denied")
+	}
+	return nil
+}
+
+func (middleware *recordingMiddleware) AfterTool(context.Context, domain.ToolCall, domain.ToolResult) error {
+	middleware.record("after_tool")
+	return nil
+}
+
+func (middleware *recordingMiddleware) record(value string) {
+	middleware.mu.Lock()
+	middleware.log = append(middleware.log, value)
+	middleware.mu.Unlock()
+}
+
+func (middleware *recordingMiddleware) events() []string {
+	middleware.mu.Lock()
+	defer middleware.mu.Unlock()
+	return append([]string(nil), middleware.log...)
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+type blockingProvider struct{ ctx context.Context }
+
+func (provider blockingProvider) Stream(context.Context, model.Request) (model.Stream, error) {
+	return &blockingStream{ctx: provider.ctx}, nil
+}
+
+type blockingStream struct{ ctx context.Context }
+
+func (stream *blockingStream) Recv() (model.Chunk, error) {
+	<-stream.ctx.Done()
+	return model.Chunk{}, stream.ctx.Err()
+}
+
+func (*blockingStream) Close() error { return nil }
+
+var _ io.Closer = (*blockingStream)(nil)

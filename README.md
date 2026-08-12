@@ -10,9 +10,10 @@ one is written in Go.
 
 ## Status
 
-Gofer is under active development. The command and engineering foundation are
-in place; runtime capabilities will land as cohesive, tested modules. It is not
-yet a drop-in DeerFlow replacement.
+Gofer is under active development. The engineering foundation, durable core,
+normalized streaming model API, OpenAI-compatible adapter, validated tool
+registry, and event-journaled agent loop are in place. It is not yet a drop-in
+DeerFlow replacement.
 
 ## Design
 
