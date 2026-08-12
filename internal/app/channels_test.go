@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -63,6 +64,58 @@ func TestOpenNativeChannelsRegistersConfiguredProviders(t *testing.T) {
 	}
 	if err = manager.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestGitHubWebhookIsPublicVerifiedAndDispatchesConfiguredAssistant(t *testing.T) {
+	t.Parallel()
+	requests := make(chan []byte, 1)
+	modelServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		requests <- body
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(writer, textChunk("GitHub run recorded"), doneChunk("stop"))
+	}))
+	defer modelServer.Close()
+	cfg := testConfig(t, modelServer.URL+"/v1")
+	cfg.Channels.Enabled = true
+	cfg.Channels.GitHub = config.ChannelGitHubConfig{
+		Enabled: true, WebhookSecret: appWebhookSecret, DefaultMentionLogin: "gofer-bot", MaxBodyBytes: 1 << 20,
+		Subscriptions: []config.ChannelGitHubSubscription{{
+			ID: "maintainer", UserID: "local", Repository: "Rememorio/gofer", AssistantID: "primary",
+			Triggers: map[string]config.ChannelGitHubTriggerConfig{"issues": {}},
+		}},
+	}
+	cfg.Auth = config.AuthConfig{Enabled: true, Tokens: []config.AuthTokenConfig{{
+		Secret: "operator-token-at-least-24-bytes", PrincipalID: "operator", Permissions: []string{string(auth.Admin)},
+	}}}
+	service, err := New(context.Background(), cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = service.Close() }()
+	server := httptest.NewServer(service.Handler())
+	defer server.Close()
+	body := []byte(`{"action":"opened","repository":{"full_name":"Rememorio/gofer"},"issue":{"number":9,"title":"Add feature","body":"Please implement it","user":{"login":"alice"}},"sender":{"login":"alice"}}`)
+	response := postAppGitHubWebhook(t, server.URL, body, "issues", "delivery-9", true)
+	if response.StatusCode != http.StatusAccepted {
+		payload, _ := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		t.Fatalf("GitHub webhook = %d: %s", response.StatusCode, payload)
+	}
+	_ = response.Body.Close()
+	select {
+	case modelRequest := <-requests:
+		if !bytes.Contains(modelRequest, []byte("Add feature")) || !bytes.Contains(modelRequest, []byte("gh issue comment")) {
+			t.Fatalf("model request = %s", modelRequest)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("GitHub run did not reach the configured assistant")
+	}
+	invalid := postAppGitHubWebhook(t, server.URL, body, "issues", "delivery-10", false)
+	defer func() { _ = invalid.Body.Close() }()
+	if invalid.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("invalid signature status = %d", invalid.StatusCode)
 	}
 }
 
@@ -294,6 +347,18 @@ func TestChannelDispatcherFailsClosedOnForeignMappingAndAnyActiveRun(t *testing.
 	}
 }
 
+func TestChannelAssistantSelectionTrustsOnlyGitHubSubscriptions(t *testing.T) {
+	t.Parallel()
+	github := channel.Message{Provider: "github", Metadata: map[string]string{"assistant_id": "reviewer"}}
+	webhook := channel.Message{Provider: "webhook", Metadata: map[string]string{"assistant_id": "reviewer"}}
+	if got := channelAssistantID(github, "primary"); got != "reviewer" {
+		t.Fatalf("GitHub assistant = %q", got)
+	}
+	if got := channelAssistantID(webhook, "primary"); got != "primary" {
+		t.Fatalf("untrusted webhook assistant = %q", got)
+	}
+}
+
 func channelTestConfig(t *testing.T, modelURL, callbackURL string) config.Config {
 	t.Helper()
 	cfg := testConfig(t, modelURL)
@@ -331,6 +396,25 @@ func postChannelEvent(t *testing.T, baseURL, eventID, text string) {
 	if response.StatusCode != http.StatusAccepted {
 		t.Fatalf("channel event status = %d: %s", response.StatusCode, payload)
 	}
+}
+
+func postAppGitHubWebhook(t *testing.T, baseURL string, body []byte, event, delivery string, valid bool) *http.Response {
+	t.Helper()
+	mac := hmac.New(sha256.New, []byte(appWebhookSecret))
+	_, _ = mac.Write(body)
+	signature := hex.EncodeToString(mac.Sum(nil))
+	if !valid {
+		signature = strings.Repeat("0", sha256.Size*2)
+	}
+	request, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, baseURL+"/api/webhooks/github", bytes.NewReader(body))
+	request.Header.Set("X-Hub-Signature-256", "sha256="+signature)
+	request.Header.Set("X-GitHub-Event", event)
+	request.Header.Set("X-GitHub-Delivery", delivery)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response
 }
 
 func waitChannelReply(t *testing.T, replies <-chan channel.Reply) channel.Reply {

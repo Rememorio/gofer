@@ -35,7 +35,7 @@ The manager also provides two separate concurrency controls:
 ## Native providers
 
 Gofer includes direct Slack, Telegram, Discord, Feishu/Lark, DingTalk, WeCom,
-and WeChat adapters. They implement the
+WeChat, and GitHub adapters. They implement the
 same `Sender` and inbound-source contracts as the generic webhook, so the
 manager owns startup, shutdown, queueing, authentication, deduplication, and
 conversation serialization uniformly. Socket providers authenticate before
@@ -178,6 +178,59 @@ channels:
     request_timeout_seconds: 45
     max_attempts: 3
 ```
+
+GitHub is repository automation rather than a chat callback. The public
+`POST /api/webhooks/github` endpoint verifies `X-Hub-Signature-256` against
+the exact request body, recognizes the supported issue and pull-request event
+families, and fans one delivery out to every matching subscription. A stable
+delivery-plus-subscription message ID makes GitHub redelivery idempotent.
+
+Each subscription is an independent Gofer identity, so the same repository may
+route to several owners or assistants without sharing conversation history.
+Events are opt-in: omitting a trigger means that subscription never receives
+it. By default, `pull_request` accepts only `opened`, while `issue_comment` and
+`pull_request_review_comment` require a mention. Explicit fields override those
+defaults. `allow_authors` bypasses the mention gate, self-authored bot events
+are rejected, and companion inline-review events are suppressed only when an
+unconditional `pull_request_review` trigger provides a safe second path.
+
+```yaml
+channels:
+  enabled: true
+  github:
+    enabled: true
+    webhook_secret: ${GITHUB_WEBHOOK_SECRET}
+    allow_unverified: false
+    default_mention_login: gofer-bot
+    max_body_bytes: 1048576
+    subscriptions:
+      - id: gofer-maintainer
+        user_id: local
+        repository: Rememorio/gofer
+        assistant_id: primary
+        bot_login: gofer-bot
+        triggers:
+          pull_request:
+            actions: [opened, synchronize, reopened]
+          issue_comment:
+            require_mention: true
+            allow_authors: [Rememorio]
+          pull_request_review: {}
+          pull_request_review_comment: {}
+```
+
+The endpoint is fail-closed: enabling GitHub requires a secret of at least 24
+characters unless `allow_unverified` is explicitly set for local development.
+The webhook handler only verifies, filters, and enqueues; it does not wait for
+an agent run, keeping the response within GitHub's delivery timeout. Queue
+backpressure returns 503 with `Retry-After: 1`. Unknown or filtered events
+return 200, and accepted work returns 202.
+
+The GitHub sender intentionally does not publish the final assistant message.
+Prompts tell the agent to use `gh issue comment`, `gh pr comment`, review, push,
+or related commands during the run when a visible GitHub side effect is needed.
+This prevents an automatic final-message comment from duplicating an action the
+agent already performed.
 
 `allowed_users` and `allowed_guilds` are transport-level allowlists; an empty
 list allows the provider event to reach Gofer's binding resolver. An active

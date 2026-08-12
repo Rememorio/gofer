@@ -268,6 +268,7 @@ type ChannelsConfig struct {
 	DingTalk          ChannelDingTalkConfig  `yaml:"dingtalk" json:"dingtalk"`
 	WeCom             ChannelWeComConfig     `yaml:"wecom" json:"wecom"`
 	WeChat            ChannelWeChatConfig    `yaml:"wechat" json:"wechat"`
+	GitHub            ChannelGitHubConfig    `yaml:"github" json:"github"`
 }
 
 // ChannelBindingConfig bootstraps one operator-approved external identity.
@@ -370,6 +371,34 @@ type ChannelWeChatConfig struct {
 	PollTimeoutSeconds    int      `yaml:"poll_timeout_seconds" json:"poll_timeout_seconds"`
 	RequestTimeoutSeconds int      `yaml:"request_timeout_seconds" json:"request_timeout_seconds"`
 	MaxAttempts           int      `yaml:"max_attempts" json:"max_attempts"`
+}
+
+// ChannelGitHubConfig controls verified repository webhook fan-out.
+type ChannelGitHubConfig struct {
+	Enabled             bool                        `yaml:"enabled" json:"enabled"`
+	WebhookSecret       string                      `yaml:"webhook_secret" json:"-"`
+	AllowUnverified     bool                        `yaml:"allow_unverified" json:"allow_unverified"`
+	DefaultMentionLogin string                      `yaml:"default_mention_login" json:"default_mention_login,omitempty"`
+	MaxBodyBytes        int64                       `yaml:"max_body_bytes" json:"max_body_bytes"`
+	Subscriptions       []ChannelGitHubSubscription `yaml:"subscriptions" json:"subscriptions"`
+}
+
+// ChannelGitHubSubscription binds repository events to one Gofer owner and assistant.
+type ChannelGitHubSubscription struct {
+	ID          string                                `yaml:"id" json:"id"`
+	UserID      string                                `yaml:"user_id" json:"user_id"`
+	Repository  string                                `yaml:"repository" json:"repository"`
+	AssistantID string                                `yaml:"assistant_id" json:"assistant_id,omitempty"`
+	BotLogin    string                                `yaml:"bot_login" json:"bot_login,omitempty"`
+	Triggers    map[string]ChannelGitHubTriggerConfig `yaml:"triggers" json:"triggers"`
+}
+
+// ChannelGitHubTriggerConfig filters one explicitly subscribed GitHub event.
+type ChannelGitHubTriggerConfig struct {
+	Actions        []string `yaml:"actions" json:"actions,omitempty"`
+	RequireMention *bool    `yaml:"require_mention" json:"require_mention,omitempty"`
+	MentionLogin   string   `yaml:"mention_login" json:"mention_login,omitempty"`
+	AllowAuthors   []string `yaml:"allow_authors" json:"allow_authors,omitempty"`
 }
 
 // TitleConfig controls automatic first-exchange conversation titles.
@@ -491,6 +520,7 @@ func Defaults() Config {
 			DingTalk:          ChannelDingTalkConfig{RequestTimeoutSeconds: 30, MaxAttempts: 3},
 			WeCom:             ChannelWeComConfig{WorkingMessage: "Working on it...", HeartbeatSeconds: 30, RequestTimeoutSeconds: 20, MaxAttempts: 3},
 			WeChat:            ChannelWeChatConfig{ChannelVersion: "1.0", PollTimeoutSeconds: 35, RequestTimeoutSeconds: 45, MaxAttempts: 3},
+			GitHub:            ChannelGitHubConfig{MaxBodyBytes: 1 << 20},
 		},
 		Title: TitleConfig{Enabled: true, MaxWords: 6, MaxChars: 60},
 		Suggestions: SuggestionsConfig{
@@ -587,6 +617,9 @@ func (config Config) Validate() error {
 		return err
 	}
 	if err := validateModels(config.Models); err != nil {
+		return err
+	}
+	if err := validateGitHubAssistants(config.Channels.GitHub, config.Models); err != nil {
 		return err
 	}
 	return validateServiceModelAliases(config)
@@ -739,7 +772,10 @@ func validateNativeChannels(channels ChannelsConfig) error {
 	if err := validateWeComChannel(channels.Enabled, channels.WeCom); err != nil {
 		return err
 	}
-	return validateWeChatChannel(channels.Enabled, channels.WeChat)
+	if err := validateWeChatChannel(channels.Enabled, channels.WeChat); err != nil {
+		return err
+	}
+	return validateGitHubChannel(channels.Enabled, channels.GitHub)
 }
 
 func validateSlackChannel(channelsEnabled bool, channel ChannelSlackConfig) error {
@@ -840,6 +876,116 @@ func validWeChatVersion(value string) bool {
 		}
 	}
 	return true
+}
+
+func validateGitHubChannel(channelsEnabled bool, github ChannelGitHubConfig) error {
+	if !github.Enabled {
+		return nil
+	}
+	if !channelsEnabled || !github.AllowUnverified && len(github.WebhookSecret) < 24 ||
+		strings.TrimSpace(github.WebhookSecret) != github.WebhookSecret || github.MaxBodyBytes < 1024 || github.MaxBodyBytes > 16<<20 ||
+		!validGitHubLogin(github.DefaultMentionLogin, true) || len(github.Subscriptions) == 0 {
+		return fmt.Errorf("%w: invalid GitHub channel configuration", ErrInvalid)
+	}
+	seen := make(map[string]struct{}, len(github.Subscriptions))
+	for _, subscription := range github.Subscriptions {
+		if err := validateGitHubSubscription(subscription, seen); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateGitHubSubscription(subscription ChannelGitHubSubscription, seen map[string]struct{}) error {
+	identifier := strings.TrimSpace(subscription.ID)
+	if identifier == "" || identifier != subscription.ID || len(identifier) > 128 || strings.TrimSpace(subscription.UserID) == "" ||
+		strings.TrimSpace(subscription.UserID) != subscription.UserID || len(subscription.UserID) > 128 ||
+		!validGitHubRepository(subscription.Repository) || len(subscription.AssistantID) > 128 || strings.TrimSpace(subscription.AssistantID) != subscription.AssistantID ||
+		!validGitHubLogin(subscription.BotLogin, true) || len(subscription.Triggers) == 0 {
+		return fmt.Errorf("%w: invalid GitHub subscription", ErrInvalid)
+	}
+	if _, duplicate := seen[strings.ToLower(identifier)]; duplicate {
+		return fmt.Errorf("%w: duplicate GitHub subscription", ErrInvalid)
+	}
+	seen[strings.ToLower(identifier)] = struct{}{}
+	for event, trigger := range subscription.Triggers {
+		if !oneOf(event, "ping", "issues", "issue_comment", "pull_request", "pull_request_review", "pull_request_review_comment") ||
+			!validGitHubTrigger(trigger) {
+			return fmt.Errorf("%w: invalid GitHub trigger", ErrInvalid)
+		}
+	}
+	return nil
+}
+
+func validGitHubTrigger(trigger ChannelGitHubTriggerConfig) bool {
+	if !validGitHubLogin(trigger.MentionLogin, true) || !validGitHubLogins(trigger.AllowAuthors) {
+		return false
+	}
+	seen := make(map[string]struct{}, len(trigger.Actions))
+	for _, action := range trigger.Actions {
+		if action == "" || strings.TrimSpace(action) != action || len(action) > 64 {
+			return false
+		}
+		if _, duplicate := seen[action]; duplicate {
+			return false
+		}
+		seen[action] = struct{}{}
+	}
+	return true
+}
+
+func validGitHubRepository(repository string) bool {
+	if repository == "" || strings.TrimSpace(repository) != repository || len(repository) > 200 {
+		return false
+	}
+	parts := strings.Split(repository, "/")
+	return len(parts) == 2 && validGitHubRepositoryPart(parts[0]) && validGitHubRepositoryPart(parts[1])
+}
+
+func validGitHubRepositoryPart(value string) bool {
+	if value == "" || value == "." || value == ".." {
+		return false
+	}
+	for _, character := range value {
+		if !asciiLetterOrDigit(character) && character != '-' && character != '_' && character != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+func validGitHubLogins(values []string) bool {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if !validGitHubLogin(value, false) {
+			return false
+		}
+		normalized := strings.ToLower(value)
+		if _, duplicate := seen[normalized]; duplicate {
+			return false
+		}
+		seen[normalized] = struct{}{}
+	}
+	return true
+}
+
+func validGitHubLogin(value string, allowEmpty bool) bool {
+	if value == "" {
+		return allowEmpty
+	}
+	if strings.TrimSpace(value) != value || len(value) > 39 || value[0] == '-' || value[len(value)-1] == '-' || strings.Contains(value, "--") {
+		return false
+	}
+	for _, character := range value {
+		if !asciiLetterOrDigit(character) && character != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func asciiLetterOrDigit(character rune) bool {
+	return character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9'
 }
 
 func validChannelIDs(values []string) bool {
@@ -1104,6 +1250,25 @@ func validateModels(models []ModelConfig) error {
 			return fmt.Errorf("%w: duplicate model name %q", ErrInvalid, model.Name)
 		}
 		names[model.Name] = struct{}{}
+	}
+	return nil
+}
+
+func validateGitHubAssistants(github ChannelGitHubConfig, models []ModelConfig) error {
+	if !github.Enabled {
+		return nil
+	}
+	aliases := map[string]struct{}{"lead_agent": {}}
+	for _, model := range models {
+		aliases[model.Name] = struct{}{}
+	}
+	for _, subscription := range github.Subscriptions {
+		if subscription.AssistantID == "" {
+			continue
+		}
+		if _, exists := aliases[subscription.AssistantID]; !exists {
+			return fmt.Errorf("%w: unknown GitHub assistant %q", ErrInvalid, subscription.AssistantID)
+		}
 	}
 	return nil
 }

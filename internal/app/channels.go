@@ -35,15 +35,8 @@ func (service *Service) openChannels() error {
 	if provider, ok := service.store.(interface{ ChannelState() channel.State }); ok {
 		state = provider.ChannelState()
 	}
-	for _, configured := range service.config.Channels.Bindings {
-		binding, err := channel.NewBinding(configured.UserID, configured.Provider, configured.WorkspaceID, configured.ExternalUserID, time.Now())
-		if err != nil {
-			return err
-		}
-		binding.WorkspaceName, binding.ExternalUserName = configured.WorkspaceName, configured.ExternalUserName
-		if _, err = state.Bind(service.ctx, binding); err != nil {
-			return fmt.Errorf("bind configured channel identity: %w", err)
-		}
+	if err := service.bootstrapChannelBindings(state); err != nil {
+		return err
 	}
 	manager, err := channel.NewManager(channel.Config{
 		Resolver: state, Dispatcher: channelDispatcher{service: service, state: state}, Dedupe: state,
@@ -59,13 +52,7 @@ func (service *Service) openChannels() error {
 	if err != nil {
 		return err
 	}
-	if service.config.Channels.Webhook.Enabled {
-		if err = service.openWebhookChannel(manager); err != nil {
-			_ = manager.Close()
-			return err
-		}
-	}
-	if err = service.openNativeChannels(manager); err != nil {
+	if err = service.registerChannels(manager); err != nil {
 		_ = manager.Close()
 		return err
 	}
@@ -74,6 +61,48 @@ func (service *Service) openChannels() error {
 		return err
 	}
 	service.channelState, service.channels = state, manager
+	return nil
+}
+
+func (service *Service) bootstrapChannelBindings(state channel.State) error {
+	for _, configured := range service.config.Channels.Bindings {
+		binding, err := channel.NewBinding(configured.UserID, configured.Provider, configured.WorkspaceID, configured.ExternalUserID, time.Now())
+		if err != nil {
+			return err
+		}
+		binding.WorkspaceName, binding.ExternalUserName = configured.WorkspaceName, configured.ExternalUserName
+		if _, err = state.Bind(service.ctx, binding); err != nil {
+			return fmt.Errorf("bind configured channel identity: %w", err)
+		}
+	}
+	if service.config.Channels.GitHub.Enabled {
+		for _, subscription := range service.config.Channels.GitHub.Subscriptions {
+			binding, bindingErr := channel.NewBinding(subscription.UserID, "github", subscription.Repository, subscription.ID, time.Now())
+			if bindingErr != nil {
+				return bindingErr
+			}
+			binding.WorkspaceName, binding.ExternalUserName = subscription.Repository, subscription.ID
+			if _, bindingErr = state.Bind(service.ctx, binding); bindingErr != nil {
+				return fmt.Errorf("bind GitHub subscription: %w", bindingErr)
+			}
+		}
+	}
+	return nil
+}
+
+func (service *Service) registerChannels(manager *channel.Manager) error {
+	var err error
+	if service.config.Channels.Webhook.Enabled {
+		if err = service.openWebhookChannel(manager); err != nil {
+			return err
+		}
+	}
+	if err = service.openNativeChannels(manager); err != nil {
+		return err
+	}
+	if err = service.openGitHubChannel(manager); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -180,6 +209,39 @@ func (service *Service) openWeChatChannel(manager *channel.Manager) error {
 	return registerNativeChannel(manager, provider, err)
 }
 
+func (service *Service) openGitHubChannel(manager *channel.Manager) error {
+	configured := service.config.Channels.GitHub
+	if !configured.Enabled {
+		return nil
+	}
+	subscriptions := make([]channel.GitHubSubscription, 0, len(configured.Subscriptions))
+	for _, subscription := range configured.Subscriptions {
+		triggers := make(map[string]channel.GitHubTrigger, len(subscription.Triggers))
+		for eventName, trigger := range subscription.Triggers {
+			triggers[eventName] = channel.GitHubTrigger{
+				Actions: trigger.Actions, RequireMention: trigger.RequireMention,
+				MentionLogin: trigger.MentionLogin, AllowAuthors: trigger.AllowAuthors,
+			}
+		}
+		subscriptions = append(subscriptions, channel.GitHubSubscription{
+			ID: subscription.ID, Repository: subscription.Repository, AssistantID: subscription.AssistantID,
+			BotLogin: subscription.BotLogin, DefaultMentionLogin: configured.DefaultMentionLogin, Triggers: triggers,
+		})
+	}
+	provider, err := channel.NewGitHub(channel.GitHubConfig{
+		Manager: manager, Secret: configured.WebhookSecret, AllowUnverified: configured.AllowUnverified,
+		MaxBodyBytes: configured.MaxBodyBytes, Subscriptions: subscriptions,
+	})
+	if err != nil {
+		return err
+	}
+	if err = manager.Register(provider); err != nil {
+		return errors.Join(err, provider.Close())
+	}
+	service.githubWebhook = provider
+	return nil
+}
+
 func registerNativeChannel(manager *channel.Manager, provider channel.Sender, err error) error {
 	if err != nil {
 		return err
@@ -244,10 +306,11 @@ func (dispatcher channelDispatcher) Dispatch(ctx context.Context, request channe
 	if err != nil {
 		return channel.Reply{}, err
 	}
+	assistantID := channelAssistantID(request.Message, dispatcher.service.config.Models[0].Name)
 	launch := gateway.StartRequest{
 		RunID: run.ID, ThreadID: threadID,
 		Request: gateway.RunRequest{
-			AssistantID: dispatcher.service.config.Models[0].Name, Input: input,
+			AssistantID: assistantID, Input: input,
 			Metadata: map[string]any{"source": "channel", "provider": request.Message.Provider, "message_id": request.Message.ID},
 		},
 	}
@@ -261,6 +324,14 @@ func (dispatcher channelDispatcher) Dispatch(ctx context.Context, request channe
 		return channel.Reply{}, err
 	}
 	return dispatcher.reply(ctx, run)
+}
+
+func channelAssistantID(message channel.Message, fallback string) string {
+	configured := strings.TrimSpace(message.Metadata["assistant_id"])
+	if message.Provider == "github" && configured != "" {
+		return configured
+	}
+	return fallback
 }
 
 func (dispatcher channelDispatcher) ensureThread(ctx context.Context, request channel.Request) (domain.ThreadID, error) {

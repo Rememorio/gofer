@@ -124,6 +124,119 @@ func TestConversationServicesAcceptKnownModelAliases(t *testing.T) {
 	}
 }
 
+func TestGitHubChannelConfigurationAndTriggerOverrides(t *testing.T) {
+	t.Parallel()
+	requireMention := false
+	config := Defaults()
+	config.Models = []ModelConfig{{Name: "reviewer", Provider: "openai", Model: "gpt-test"}}
+	config.Channels.Enabled = true
+	config.Channels.GitHub = ChannelGitHubConfig{
+		Enabled: true, WebhookSecret: "github-secret-at-least-24-bytes", DefaultMentionLogin: "gofer-bot", MaxBodyBytes: 1 << 20,
+		Subscriptions: []ChannelGitHubSubscription{{
+			ID: "reviewer", UserID: "alice", Repository: "Rememorio/gofer", AssistantID: "reviewer", BotLogin: "gofer-bot",
+			Triggers: map[string]ChannelGitHubTriggerConfig{
+				"pull_request":  {Actions: []string{"opened", "synchronize"}},
+				"issue_comment": {RequireMention: &requireMention, MentionLogin: "gofer-bot", AllowAuthors: []string{"Rememorio"}},
+			},
+		}},
+	}
+	if err := config.Validate(); err != nil {
+		t.Fatalf("Validate() = %v", err)
+	}
+	config.Channels.GitHub.WebhookSecret = ""
+	config.Channels.GitHub.AllowUnverified = true
+	if err := config.Validate(); err != nil {
+		t.Fatalf("unverified Validate() = %v", err)
+	}
+}
+
+func TestGitHubChannelRejectsUnsafeConfiguration(t *testing.T) {
+	t.Parallel()
+	base := func() Config {
+		config := Defaults()
+		config.Models = []ModelConfig{{Name: "primary", Provider: "openai", Model: "gpt-test"}}
+		config.Channels.Enabled = true
+		config.Channels.GitHub = ChannelGitHubConfig{
+			Enabled: true, WebhookSecret: "github-secret-at-least-24-bytes", MaxBodyBytes: 1 << 20,
+			Subscriptions: []ChannelGitHubSubscription{{ID: "main", UserID: "alice", Repository: "Rememorio/gofer", AssistantID: "primary", Triggers: map[string]ChannelGitHubTriggerConfig{"issues": {}}}},
+		}
+		return config
+	}
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "channels disabled", mutate: func(config *Config) { config.Channels.Enabled = false }},
+		{name: "short secret", mutate: func(config *Config) { config.Channels.GitHub.WebhookSecret = "short" }},
+		{name: "body limit", mutate: func(config *Config) { config.Channels.GitHub.MaxBodyBytes = 100 }},
+		{name: "missing subscriptions", mutate: func(config *Config) { config.Channels.GitHub.Subscriptions = nil }},
+		{name: "duplicate subscription", mutate: func(config *Config) {
+			duplicate := config.Channels.GitHub.Subscriptions[0]
+			duplicate.ID = "MAIN"
+			config.Channels.GitHub.Subscriptions = append(config.Channels.GitHub.Subscriptions, duplicate)
+		}},
+		{name: "repository", mutate: func(config *Config) { config.Channels.GitHub.Subscriptions[0].Repository = "owner/repo/extra" }},
+		{name: "bot login", mutate: func(config *Config) { config.Channels.GitHub.Subscriptions[0].BotLogin = "-bot" }},
+		{name: "event", mutate: func(config *Config) {
+			config.Channels.GitHub.Subscriptions[0].Triggers = map[string]ChannelGitHubTriggerConfig{"workflow_run": {}}
+		}},
+		{name: "duplicate action", mutate: func(config *Config) {
+			config.Channels.GitHub.Subscriptions[0].Triggers["issues"] = ChannelGitHubTriggerConfig{Actions: []string{"opened", "opened"}}
+		}},
+		{name: "author", mutate: func(config *Config) {
+			config.Channels.GitHub.Subscriptions[0].Triggers["issues"] = ChannelGitHubTriggerConfig{AllowAuthors: []string{"bad_login"}}
+		}},
+		{name: "assistant", mutate: func(config *Config) { config.Channels.GitHub.Subscriptions[0].AssistantID = "missing" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := base()
+			test.mutate(&config)
+			if err := config.Validate(); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Validate() = %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadGitHubChannel(t *testing.T) {
+	t.Parallel()
+	raw := `
+config_version: 1
+storage:
+  driver: memory
+channels:
+  enabled: true
+  github:
+    enabled: true
+    webhook_secret: $GITHUB_SECRET
+    default_mention_login: gofer-bot
+    max_body_bytes: 2048
+    subscriptions:
+      - id: maintainer
+        user_id: alice
+        repository: Rememorio/gofer
+        assistant_id: primary
+        triggers:
+          issue_comment:
+            require_mention: false
+models:
+  - name: primary
+    provider: openai
+    model: gpt-test
+`
+	config, err := Load(strings.NewReader(raw), WithEnvLookup(func(name string) (string, bool) {
+		return "github-secret-at-least-24-bytes", name == "GITHUB_SECRET"
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	trigger := config.Channels.GitHub.Subscriptions[0].Triggers["issue_comment"]
+	if trigger.RequireMention == nil || *trigger.RequireMention || config.Channels.GitHub.MaxBodyBytes != 2048 {
+		t.Fatalf("GitHub config = %#v", config.Channels.GitHub)
+	}
+}
+
 func TestLoadCanDisableRuntimeGuards(t *testing.T) {
 	t.Parallel()
 	config, err := Load(strings.NewReader("config_version: 1\nloop_detection:\n  enabled: false\nread_before_write:\n  enabled: false\nstorage:\n  driver: memory\n"))

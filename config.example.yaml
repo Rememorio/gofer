@@ -228,6 +228,28 @@ channels:
     poll_timeout_seconds: 35
     request_timeout_seconds: 45
     max_attempts: 3
+  # GitHub verifies repository webhook deliveries and fans each event out to
+  # explicitly subscribed Gofer owners. Agents use gh during the run to reply.
+  github:
+    enabled: false
+    webhook_secret: ""
+    allow_unverified: false
+    default_mention_login: ""
+    max_body_bytes: 1048576
+    subscriptions: []
+    # subscriptions:
+    #   - id: gofer-maintainer
+    #     user_id: local
+    #     repository: Rememorio/gofer
+    #     assistant_id: primary
+    #     bot_login: gofer-bot
+    #     triggers:
+    #       pull_request:
+    #         actions: [opened, synchronize, reopened]
+    #       issue_comment:
+    #         require_mention: true
+    #         mention_login: gofer-bot
+    #         allow_authors: [Rememorio]
 
 # Empty conversations receive a bounded local title after their first user
 # turn. Set model_name to use a configured model alias instead; failures still

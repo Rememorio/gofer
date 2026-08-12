@@ -81,6 +81,7 @@ type Service struct {
 	channels       *channel.Manager
 	channelState   channel.State
 	channelWebhook http.Handler
+	githubWebhook  http.Handler
 	providers      map[string]configuredProvider
 	metrics        *observe.Registry
 	handler        http.Handler
@@ -396,6 +397,9 @@ func (service *Service) openHandler() error {
 	mux.Handle("/", api)
 	if service.channelWebhook != nil {
 		mux.Handle("POST /api/channels/webhook/{workspace_id}/events", service.channelWebhook)
+	}
+	if service.githubWebhook != nil {
+		mux.Handle("POST /api/webhooks/github", service.githubWebhook)
 	}
 	mux.HandleFunc("GET /metrics", service.serveMetrics)
 	service.handler = service.observeRequests(mux)
