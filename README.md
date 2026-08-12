@@ -24,7 +24,9 @@ with bounded sessions, stable snapshot references, screenshot artifacts, and
 request-level SSRF policy enforcement.
 Long-running task control now includes optimistic goal and todo state,
 hierarchically scoped memory recall, safe conversation compaction, and bounded
-parallel child agents with ordered lifecycle events.
+parallel child agents with ordered lifecycle events. Goal and todo snapshots
+are durable with SQLite/PostgreSQL and manageable through owner-scoped thread
+APIs.
 The durable service boundary now includes DeerFlow-shaped thread and run
 responses, resumable run-event SSE, and transactional SQLite/PostgreSQL stores.
 Owner-scoped thread search, patch/delete, run and message feeds, state lookup,

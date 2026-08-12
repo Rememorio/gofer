@@ -28,6 +28,9 @@ store interface, so transport code does not own model or database behavior.
 - Upload and artifact routes resolve through the thread workspace, preserve
   collision-free names, enforce size and path boundaries, and support HTTP
   range delivery.
+- Goal and todo endpoints operate on the same compare-and-swap state used by
+  agent control tools. SQLite and PostgreSQL persist each version and reject
+  stale writers.
 
 The gateway reserves the `user_id` metadata key for its authenticated owner.
 It is never accepted from or returned to clients. Every thread, run, event,

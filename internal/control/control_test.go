@@ -73,6 +73,35 @@ func TestServiceRejectsInvalidTransitions(t *testing.T) {
 	}
 }
 
+func TestServiceSetClearAndDeleteGoal(t *testing.T) {
+	t.Parallel()
+	id := newThreadID(t)
+	store := NewInMemory()
+	service, _ := NewService(store, nil)
+	ctx := context.Background()
+	if _, err := service.SetGoal(ctx, id, " first ", 10); err != nil {
+		t.Fatal(err)
+	}
+	state, err := service.SetGoal(ctx, id, "second", 20)
+	if err != nil || state.Goal.Objective != "second" || state.Goal.TokenBudget != 20 || len(state.Todos) != 0 {
+		t.Fatalf("SetGoal() = %#v, %v", state, err)
+	}
+	state, err = service.ClearGoal(ctx, id)
+	if err != nil || state.Goal != nil || len(state.Todos) != 0 {
+		t.Fatalf("ClearGoal() = %#v, %v", state, err)
+	}
+	if err = service.Delete(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	state, err = service.Snapshot(ctx, id)
+	if err != nil || state.Version != 0 {
+		t.Fatalf("Snapshot() = %#v, %v", state, err)
+	}
+	if _, err = service.SetGoal(ctx, id, "", 0); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("SetGoal(invalid) = %v", err)
+	}
+}
+
 func TestInMemoryCASIsolationAndConcurrency(t *testing.T) {
 	t.Parallel()
 	id := newThreadID(t)

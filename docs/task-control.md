@@ -15,7 +15,10 @@ atomic, keeps stable ordering, and permits at most one `in_progress` item.
 The control store uses compare-and-swap versions. Concurrent writers either
 apply to the latest snapshot or receive a conflict after bounded retries,
 which prevents lost plan updates. `control_read`, `goal_create`, `goal_update`,
-and `todo_write` expose the same state machine to an agent.
+and `todo_write` expose the same state machine to an agent. The service selects
+a durable SQLite/PostgreSQL adapter automatically and exposes the same state at
+the thread goal, control, and todo HTTP endpoints. Goal replacement or clearing
+through HTTP is rejected while a run is active.
 
 ## Child agents
 

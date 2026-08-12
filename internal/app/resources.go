@@ -354,19 +354,27 @@ func activeContent(mediaType string) bool {
 }
 
 func (service *Service) resourceWorkspace(request *http.Request) (domain.Thread, *workspace.Thread, error) {
-	threadID, err := domain.ParseThreadID(request.PathValue("thread_id"))
+	thread, err := service.ownedThread(request)
 	if err != nil {
 		return domain.Thread{}, nil, err
+	}
+	threadWorkspace, err := service.workspaces.Open(thread.ID)
+	return thread, threadWorkspace, err
+}
+
+func (service *Service) ownedThread(request *http.Request) (domain.Thread, error) {
+	threadID, err := domain.ParseThreadID(request.PathValue("thread_id"))
+	if err != nil {
+		return domain.Thread{}, err
 	}
 	thread, err := service.store.Thread(request.Context(), threadID)
 	if err != nil || !store.ThreadOwnedBy(thread, requestUser(request.Context())) {
 		if err == nil {
 			err = store.ErrNotFound
 		}
-		return domain.Thread{}, nil, err
+		return domain.Thread{}, err
 	}
-	threadWorkspace, err := service.workspaces.Open(threadID)
-	return thread, threadWorkspace, err
+	return thread, nil
 }
 
 func artifactURL(threadID domain.ThreadID, virtualPath string) string {

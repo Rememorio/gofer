@@ -74,6 +74,7 @@ type State struct {
 type Store interface {
 	Load(context.Context, domain.ThreadID) (State, error)
 	CompareAndSwap(context.Context, State, uint64) (State, error)
+	Delete(context.Context, domain.ThreadID) error
 }
 
 // InMemory is the concurrency-safe reference Store.
@@ -121,6 +122,20 @@ func (store *InMemory) CompareAndSwap(ctx context.Context, next State, expected 
 	return cloneState(next), nil
 }
 
+// Delete removes control state for a deleted thread. Missing state is a no-op.
+func (store *InMemory) Delete(ctx context.Context, threadID domain.ThreadID) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := domain.ParseThreadID(string(threadID)); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	store.mu.Lock()
+	delete(store.states, threadID)
+	store.mu.Unlock()
+	return nil
+}
+
 // Service applies validated goal and todo transitions.
 type Service struct {
 	store Store
@@ -159,6 +174,36 @@ func (service *Service) CreateGoal(ctx context.Context, threadID domain.ThreadID
 		state.UpdatedAt = now
 		return nil
 	})
+}
+
+// SetGoal creates or replaces the thread goal and clears its todo plan.
+func (service *Service) SetGoal(ctx context.Context, threadID domain.ThreadID, objective string, tokenBudget int) (State, error) {
+	objective = strings.TrimSpace(objective)
+	if objective == "" || len(objective) > 16<<10 || tokenBudget < 0 {
+		return State{}, fmt.Errorf("%w: objective and non-negative budget are required", ErrInvalid)
+	}
+	return service.update(ctx, threadID, func(state *State) error {
+		now := service.now()
+		state.Goal = &Goal{Objective: objective, Status: GoalActive, TokenBudget: tokenBudget, StartedAt: now}
+		state.Todos = []Todo{}
+		state.UpdatedAt = now
+		return nil
+	})
+}
+
+// ClearGoal removes the goal and todo plan while retaining optimistic history.
+func (service *Service) ClearGoal(ctx context.Context, threadID domain.ThreadID) (State, error) {
+	return service.update(ctx, threadID, func(state *State) error {
+		state.Goal = nil
+		state.Todos = []Todo{}
+		state.UpdatedAt = service.now()
+		return nil
+	})
+}
+
+// Delete removes all control state owned by a deleted thread.
+func (service *Service) Delete(ctx context.Context, threadID domain.ThreadID) error {
+	return service.store.Delete(ctx, threadID)
 }
 
 // SetGoalStatus completes or blocks the active goal.

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Rememorio/gofer/internal/control"
 	"github.com/Rememorio/gofer/internal/domain"
 	"github.com/Rememorio/gofer/internal/event"
 	"github.com/Rememorio/gofer/internal/store"
@@ -110,7 +111,11 @@ var schema = []string{
 	`CREATE INDEX IF NOT EXISTS gofer_scheduled_tasks_due_idx ON gofer_scheduled_tasks(status,next_run_at,lease_expires_at)`,
 	`CREATE INDEX IF NOT EXISTS gofer_scheduled_tasks_user_idx ON gofer_scheduled_tasks(user_id,created_at)`,
 	`CREATE TABLE IF NOT EXISTS gofer_skill_state (category TEXT NOT NULL,name TEXT NOT NULL,enabled BOOLEAN NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(category,name))`,
+	`CREATE TABLE IF NOT EXISTS gofer_control_state (thread_id TEXT PRIMARY KEY REFERENCES gofer_threads(id) ON DELETE CASCADE,version BIGINT NOT NULL,goal TEXT NOT NULL,todos TEXT NOT NULL,updated_at TEXT NOT NULL)`,
 }
+
+// ControlState exposes a durable goal and todo store backed by this database.
+func (database *SQL) ControlState() control.Store { return &controlState{database: database} }
 
 // CreateThread persists a validated thread transactionally.
 func (database *SQL) CreateThread(ctx context.Context, thread domain.Thread) error {

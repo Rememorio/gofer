@@ -112,7 +112,11 @@ func (service *Service) open() error {
 	if err != nil {
 		return err
 	}
-	service.controls, err = control.NewService(control.NewInMemory(), time.Now)
+	var controlStore control.Store = control.NewInMemory()
+	if provider, ok := service.store.(interface{ ControlState() control.Store }); ok {
+		controlStore = provider.ControlState()
+	}
+	service.controls, err = control.NewService(controlStore, time.Now)
 	if err != nil {
 		return err
 	}
@@ -278,6 +282,7 @@ func (service *Service) openHandler() error {
 	apiMux.Handle("/", gatewayHandler)
 	service.schedulerRoutes(apiMux)
 	service.resourceRoutes(apiMux)
+	service.controlRoutes(apiMux)
 	var api http.Handler = apiMux
 	if service.config.Auth.Enabled {
 		authenticator, authErr := buildAuthenticator(service.config.Auth)
@@ -335,6 +340,7 @@ func (service *Service) CleanupThread(ctx context.Context, threadID domain.Threa
 		}
 	}
 	service.artifacts.RemoveThread(threadID)
+	cleanupErr = errors.Join(cleanupErr, service.controls.Delete(ctx, threadID))
 	cleanupErr = errors.Join(cleanupErr, service.workspaces.Remove(threadID))
 	return cleanupErr
 }

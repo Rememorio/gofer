@@ -117,6 +117,23 @@ HTTP ranges and force active HTML or SVG content to download with MIME
 sniffing disabled. With authentication enabled, these routes require
 `resources:read` or `resources:write` and remain scoped to the thread owner.
 
+Long-running goal state is shared by the HTTP API and the agent's control
+tools:
+
+```text
+GET    /api/threads/{thread_id}/goal
+PUT    /api/threads/{thread_id}/goal
+DELETE /api/threads/{thread_id}/goal
+GET    /api/threads/{thread_id}/control
+PUT    /api/threads/{thread_id}/todos
+```
+
+Goal responses follow DeerFlow's `{ "goal": ... }` shape. The `control`
+resource includes the optimistic version and ordered todos. HTTP mutations are
+rejected while a run is non-terminal, and SQL stores recover the same state
+after restart. These routes use the existing `threads:read` and
+`threads:write` permissions.
+
 SSE sequence numbers are emitted as event IDs; clients may reconnect with
 `Last-Event-ID`. Health is public at `/healthz`. Prometheus text exposition is
 available at `/metrics`. When bearer authentication is enabled, all API routes
