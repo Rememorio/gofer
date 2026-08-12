@@ -87,6 +87,9 @@ const (
 	// StopLoopCapped identifies a host-side safety stop before repetitive tool
 	// calls were executed. Providers never need to emit this reason directly.
 	StopLoopCapped StopReason = "loop_capped"
+	// StopTerminalError identifies a visible host fallback after the provider
+	// returned no final answer twice. Providers never emit this reason.
+	StopTerminalError StopReason = "terminal_error"
 )
 
 // Response is the fully collected result of one model stream.
@@ -220,7 +223,7 @@ func (usage Usage) valid() bool {
 
 func (reason StopReason) valid() bool {
 	switch reason {
-	case StopEndTurn, StopToolUse, StopMaxTokens, StopContentFilter, StopLoopCapped:
+	case StopEndTurn, StopToolUse, StopMaxTokens, StopContentFilter, StopLoopCapped, StopTerminalError:
 		return true
 	default:
 		return false

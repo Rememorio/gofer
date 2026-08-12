@@ -38,6 +38,13 @@ var (
 	ErrModelTruncated = errors.New("model response was truncated")
 	// ErrProtocol identifies inconsistent normalized model output.
 	ErrProtocol = errors.New("model protocol violation")
+	// ErrRetryModelResponse asks the runner to discard the current empty model
+	// message and spend another bounded model turn. Response-transforming
+	// middleware may return this sentinel before persistence.
+	ErrRetryModelResponse = errors.New("retry model response")
+	// ErrTerminalResponse identifies a provider that produced no visible final
+	// response after bounded recovery.
+	ErrTerminalResponse = errors.New("model returned no final response after one automatic retry")
 )
 
 // RunnerConfig configures a durable agent runner.
@@ -167,6 +174,8 @@ type toolOutcome struct {
 
 type usageRecorderKey struct{}
 
+type modelTurnsRemainingKey struct{}
+
 type usageRecorder func(context.Context, string, string, model.Usage) error
 
 // RecordModelUsage durably attributes an auxiliary model call when invoked
@@ -180,6 +189,16 @@ func RecordModelUsage(ctx context.Context, modelName, caller string, usage model
 		return nil
 	}
 	return record(ctx, modelName, caller, usage)
+}
+
+// RemainingModelTurns returns the number of provider calls still available
+// after the active call. It is available only inside runtime middleware hooks.
+func RemainingModelTurns(ctx context.Context) (int, bool) {
+	if ctx == nil {
+		return 0, false
+	}
+	remaining, ok := ctx.Value(modelTurnsRemainingKey{}).(int)
+	return remaining, ok
 }
 
 func (runner *Runner) newExecution(ctx context.Context, request Request) (*execution, error) {
@@ -227,12 +246,18 @@ func (execution *execution) run(ctx context.Context) (Result, error) {
 	for execution.turns < execution.runner.maxTurns {
 		execution.turns++
 		response, message, err := execution.modelTurn(ctx)
+		if errors.Is(err, ErrRetryModelResponse) {
+			continue
+		}
 		if err != nil {
 			return Result{}, err
 		}
 		execution.messages = append(execution.messages, message)
 		if len(response.ToolCalls) == 0 {
 			execution.stopReason = response.StopReason
+			if response.StopReason == model.StopTerminalError {
+				return Result{}, ErrTerminalResponse
+			}
 			return execution.complete(ctx)
 		}
 		results, err := execution.toolTurn(ctx, response.ToolCalls)
@@ -261,6 +286,7 @@ func (execution *execution) start(ctx context.Context) error {
 
 func (execution *execution) modelTurn(ctx context.Context) (model.Response, domain.Message, error) {
 	ctx = context.WithValue(ctx, usageRecorderKey{}, usageRecorder(execution.recordModelUsage))
+	ctx = context.WithValue(ctx, modelTurnsRemainingKey{}, execution.runner.maxTurns-execution.turns)
 	request := model.Request{
 		Model:       execution.request.Model,
 		System:      execution.request.System,
@@ -289,6 +315,12 @@ func (execution *execution) modelTurn(ctx context.Context) (model.Response, doma
 	}
 	response, err = execution.runner.transformModelResponse(ctx, response)
 	if err != nil {
+		if errors.Is(err, ErrRetryModelResponse) {
+			if retryErr := execution.recordModelRetry(ctx, response); retryErr != nil {
+				return model.Response{}, domain.Message{}, retryErr
+			}
+			return response, domain.Message{}, err
+		}
 		return model.Response{}, domain.Message{}, err
 	}
 	if err := validateResponse(response); err != nil {
@@ -322,6 +354,17 @@ func (execution *execution) recordModelUsage(ctx context.Context, modelName, cal
 		return err
 	}
 	addUsage(&execution.usage, next)
+	return nil
+}
+
+func (execution *execution) recordModelRetry(ctx context.Context, response model.Response) error {
+	if err := execution.journal.append(ctx, event.ModelRetry, map[string]any{
+		"turn": execution.turns, "reason": "model_response_recovery",
+		"model": execution.request.Model, "caller": execution.request.Caller, "usage": response.Usage,
+	}); err != nil {
+		return err
+	}
+	addUsage(&execution.usage, response.Usage)
 	return nil
 }
 
@@ -478,13 +521,16 @@ func (runner *Runner) transformModelResponse(ctx context.Context, response model
 			continue
 		}
 		transformed, err := transformer.TransformModelResponse(ctx, response)
-		if err != nil {
+		if err != nil && !errors.Is(err, ErrRetryModelResponse) {
 			return model.Response{}, fmt.Errorf("transform model response: %w", err)
 		}
 		if transformed.Usage != response.Usage {
 			return model.Response{}, fmt.Errorf("transform model response: %w: transformer changed usage", ErrProtocol)
 		}
 		response = transformed
+		if err != nil {
+			return response, fmt.Errorf("transform model response: %w", err)
+		}
 	}
 	return response, nil
 }
@@ -534,7 +580,9 @@ func (execution *execution) finishError(ctx context.Context, cause error) error 
 	if transitionErr == nil {
 		execution.state = run
 	}
-	appendErr := execution.journal.append(background, kind, map[string]string{"error": cause.Error()})
+	appendErr := execution.journal.append(background, kind, map[string]any{
+		"error": cause.Error(), "stop_reason": execution.stopReason,
+	})
 	return errors.Join(cause, finalizeErr, transitionErr, appendErr)
 }
 
@@ -620,6 +668,11 @@ func assistantMessage(response model.Response, at time.Time) (domain.Message, er
 		contents = append(contents, domain.Content{Kind: domain.ContentToolCall, ToolCall: &call})
 	}
 	message := domain.Message{ID: id, Role: domain.RoleAssistant, Content: contents, CreatedAt: at}
+	if response.StopReason == model.StopTerminalError {
+		message.Metadata = map[string]string{
+			"internal_kind": "terminal_response_fallback", "error_reason": ErrTerminalResponse.Error(),
+		}
+	}
 	if err := message.Validate(); err != nil {
 		return domain.Message{}, fmt.Errorf("build assistant message: %w", err)
 	}

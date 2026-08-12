@@ -75,6 +75,28 @@ func TestAggregateFiltersRunLifecycleAndSyntheticHistory(t *testing.T) {
 	}
 }
 
+func TestSummarizeCountsRetriedModelUsage(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	thread, _ := domain.NewThread(now)
+	run, _ := domain.NewRun(thread.ID, now)
+	answer, _ := domain.NewTextMessage(domain.RoleAssistant, "recovered", now)
+	records := []event.Event{
+		usageEvent(t, thread.ID, run.ID, event.ModelRetry, 1, map[string]any{
+			"model": "primary", "caller": CallerLeadAgent,
+			"usage": model.Usage{InputTokens: 4, OutputTokens: 1},
+		}),
+		usageEvent(t, thread.ID, run.ID, event.MessageCompleted, 2, map[string]any{
+			"message": answer, "model": "primary", "caller": CallerLeadAgent,
+			"usage": model.Usage{InputTokens: 3, OutputTokens: 2}, "stop_reason": model.StopEndTurn,
+		}),
+	}
+	summary := Summarize(records)
+	if summary.InputTokens != 7 || summary.OutputTokens != 3 || summary.LLMCallCount != 2 || summary.LeadAgentTokens != 10 {
+		t.Fatalf("summary = %#v", summary)
+	}
+}
+
 func TestUsageParsingRejectsMalformedMetadataAndSaturates(t *testing.T) {
 	t.Parallel()
 	if got := safeAdd(math.MaxInt-1, 2); got != math.MaxInt {

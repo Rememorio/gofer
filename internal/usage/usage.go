@@ -102,6 +102,8 @@ func Summarize(records []event.Event) RunSummary {
 			addMessageUsage(&summary, record)
 		case event.ModelUsage:
 			addMessageUsage(&summary, record)
+		case event.ModelRetry:
+			addMessageUsage(&summary, record)
 		case event.ToolCompleted:
 			addSubagentUsage(&summary, record, seenSubagents)
 		case event.RunStarted, event.RunInterrupted, event.RunCompleted, event.RunFailed,

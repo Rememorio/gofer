@@ -82,6 +82,10 @@ Interrupted tool turns are repaired at the provider boundary. Missing results
 receive temporary recoverable errors, late results are restored beside their
 calls, and orphan results are omitted from that request, while the durable
 conversation remains an exact record of what actually happened.
+Tool-using runs also have a visible terminal-response guarantee. One empty
+post-tool answer receives a bounded automatic retry; another empty answer (or
+an exhausted turn budget) records a user-visible fallback and fails the run
+explicitly instead of silently completing or losing the provider usage.
 The `gofer serve` command now assembles the model provider, durable store,
 isolated workspaces, sandbox, browser, policy, runtime, gateway, graceful
 shutdown, and Prometheus endpoint into a runnable service. MCP tools, projected
@@ -126,6 +130,8 @@ Repetitive-call safety is documented in
 [Tool loop detection](docs/loop-detection.md).
 Provider-safe interrupted transcripts are documented in
 [Tool history repair](docs/tool-history.md).
+Post-tool final-answer recovery is documented in
+[Terminal responses](docs/terminal-response.md).
 
 ## Development
 

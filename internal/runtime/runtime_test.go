@@ -362,6 +362,53 @@ func TestRunnerModelResponseTransformersComposeAndPreserveUsage(t *testing.T) {
 	}
 }
 
+func TestRunnerRetriesModelResponseWithExactUsage(t *testing.T) {
+	t.Parallel()
+	retry := &retryResponseMiddleware{}
+	fixture := newFixtureWithMiddleware(t, [][]model.Chunk{
+		{{Kind: model.ChunkUsage, Usage: &model.Usage{InputTokens: 2, OutputTokens: 1}}, {Kind: model.ChunkDone, StopReason: model.StopEndTurn}},
+		{{Kind: model.ChunkTextDelta, Text: "recovered"}, {Kind: model.ChunkUsage, Usage: &model.Usage{InputTokens: 3, OutputTokens: 2}}, {Kind: model.ChunkDone, StopReason: model.StopEndTurn}},
+	}, nil, []Middleware{retry})
+	fixture.runner.maxTurns = 2
+	result, err := fixture.runner.Run(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Turns != 2 || result.Usage.InputTokens != 5 || result.Usage.OutputTokens != 3 || len(result.Messages) != 2 {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(fixture.provider.Requests) != 2 || len(retry.remaining) != 2 || retry.remaining[0] != 1 || retry.remaining[1] != 0 {
+		t.Fatalf("requests=%d remaining=%v", len(fixture.provider.Requests), retry.remaining)
+	}
+	assertEventKinds(t, fixture.store, fixture.run.ID, []event.Kind{
+		event.RunStarted, event.MessageStarted, event.ModelRetry,
+		event.MessageStarted, event.MessageDelta, event.MessageCompleted, event.RunCompleted,
+	})
+	if remaining, ok := RemainingModelTurns(context.Background()); ok || remaining != 0 {
+		t.Fatalf("remaining outside runtime = %d, %v", remaining, ok)
+	}
+}
+
+func TestRunnerPersistsVisibleTerminalResponseFailure(t *testing.T) {
+	t.Parallel()
+	fixture := newFixture(t, [][]model.Chunk{{
+		{Kind: model.ChunkTextDelta, Text: "visible fallback"},
+		{Kind: model.ChunkDone, StopReason: model.StopTerminalError},
+	}}, nil)
+	result, err := fixture.runner.Run(context.Background(), fixture.request)
+	if !errors.Is(err, ErrTerminalResponse) {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.StopReason != model.StopTerminalError || len(result.Messages) != 2 ||
+		result.Messages[1].Metadata["internal_kind"] != "terminal_response_fallback" {
+		t.Fatalf("result = %#v", result)
+	}
+	assertRunStatus(t, fixture.store, fixture.run.ID, domain.RunFailed)
+	assertEventKinds(t, fixture.store, fixture.run.ID, []event.Kind{
+		event.RunStarted, event.MessageStarted, event.MessageDelta, event.MessageCompleted, event.RunFailed,
+	})
+}
+
 func TestRunnerFailsBeforeToolPersistenceOnResultBoundaryError(t *testing.T) {
 	t.Parallel()
 	registry := tool.NewRegistry()
@@ -729,6 +776,22 @@ type responseBoundaryMiddleware struct {
 	suffix      string
 	changeUsage bool
 	err         error
+}
+
+type retryResponseMiddleware struct {
+	NopMiddleware
+	retried   bool
+	remaining []int
+}
+
+func (middleware *retryResponseMiddleware) TransformModelResponse(ctx context.Context, response model.Response) (model.Response, error) {
+	remaining, _ := RemainingModelTurns(ctx)
+	middleware.remaining = append(middleware.remaining, remaining)
+	if !middleware.retried {
+		middleware.retried = true
+		return response, ErrRetryModelResponse
+	}
+	return response, nil
 }
 
 func (middleware *responseBoundaryMiddleware) TransformModelResponse(_ context.Context, response model.Response) (model.Response, error) {

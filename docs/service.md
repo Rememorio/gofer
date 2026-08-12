@@ -65,6 +65,13 @@ Optional agent extensions are initialized before the listener becomes ready:
   required position. Late results are regrouped by call ID, and orphan or
   excess results are withheld from the provider. These corrections never alter
   journal events or conversation APIs.
+- Terminal-response recovery is always active for user turns that have executed
+  a tool. The first empty end-turn response is discarded and retried once with
+  a temporary reminder when the run still has model-turn budget. A repeated
+  empty response, or an exhausted budget, persists a visible fallback and
+  fails the run with `stop_reason: terminal_error`. Tool-call responses,
+  visible text, provider truncation, and turns without tool results are not
+  rewritten.
 - `subagent_spawn` starts bounded parallel child agents. Each child gets an
   isolated run journal and tool registry while sharing only the parent's
   policy-controlled workspace, configured extensions, and tenant scope. The
@@ -198,6 +205,8 @@ The response includes input/output/total tokens, completed run count, per-model
 tokens and run participation, and `lead_agent`, `subagent`, and `middleware`
 caller buckets. By default aggregation includes successful and failed runs;
 `include_active=true` also exposes durable progress from running runs.
+Automatically retried empty responses are represented by `model.retry` events,
+so their provider usage and LLM call count remain included exactly once.
 `context_usage` estimates the currently materialized conversation against the
 configured context limit and reports a one-decimal percentage. Synthetic
 branch-history runs are excluded from billing totals.

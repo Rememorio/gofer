@@ -42,6 +42,7 @@ import (
 	"github.com/Rememorio/gofer/internal/store"
 	"github.com/Rememorio/gofer/internal/store/sqlstore"
 	"github.com/Rememorio/gofer/internal/subagent"
+	"github.com/Rememorio/gofer/internal/terminalresponse"
 	"github.com/Rememorio/gofer/internal/tool"
 	"github.com/Rememorio/gofer/internal/tool/builtin"
 	"github.com/Rememorio/gofer/internal/toolhistory"
@@ -646,6 +647,11 @@ func (service *Service) runtimeMiddleware(threadID domain.ThreadID, provider con
 	// Repair runs last so compaction and every temporary context contribution
 	// have already produced the exact transcript sent to the provider.
 	middleware = append(middleware, historyRepair)
+	terminalGuard, err := terminalresponse.New(terminalresponse.DefaultConfig())
+	if err != nil {
+		return nil, err
+	}
+	middleware = append(middleware, terminalGuard)
 	return middleware, nil
 }
 

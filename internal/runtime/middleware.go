@@ -33,7 +33,9 @@ type ToolResultTransformer interface {
 
 // ModelResponseTransformer optionally rewrites one fully collected response
 // before validation, journaling, or tool execution. Transformers run serially
-// in registration order and must preserve provider usage accounting.
+// in registration order and must preserve provider usage accounting. Returning
+// ErrRetryModelResponse discards the message, journals its usage as a retry,
+// and spends another normal model turn.
 type ModelResponseTransformer interface {
 	TransformModelResponse(context.Context, model.Response) (model.Response, error)
 }

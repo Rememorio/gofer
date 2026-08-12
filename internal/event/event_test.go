@@ -61,6 +61,9 @@ func TestModelUsageKindIsStable(t *testing.T) {
 	if _, err := NewDraft(threadID, runID, ModelUsage, time.Now(), map[string]int{"input_tokens": 1}); err != nil {
 		t.Fatalf("NewDraft(ModelUsage) = %v", err)
 	}
+	if _, err := NewDraft(threadID, runID, ModelRetry, time.Now(), map[string]int{"turn": 2}); err != nil {
+		t.Fatalf("NewDraft(ModelRetry) = %v", err)
+	}
 }
 
 func TestWorkspaceChangesKindIsStable(t *testing.T) {
