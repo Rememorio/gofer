@@ -85,3 +85,7 @@ models:
     provider: openai
     model: gpt-5
     api_key: $OPENAI_API_KEY
+    options:
+      display_name: GPT-5
+      supports_thinking: true
+      supports_vision: true

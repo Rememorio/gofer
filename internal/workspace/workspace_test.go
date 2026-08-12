@@ -160,6 +160,18 @@ func TestWorkspaceUploadsAreCollisionFree(t *testing.T) {
 	if first.Path != UploadsRoot+"/report.txt" || second.Path != UploadsRoot+"/report-1.txt" {
 		t.Fatalf("upload paths = %q, %q", first.Path, second.Path)
 	}
+	if err := workspace.RemoveUpload("report.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workspace.Inspect(UploadsRoot + "/report.txt"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Inspect(deleted upload) = %v", err)
+	}
+	if err := workspace.RemoveUpload("../bad"); !errors.Is(err, ErrInvalidPath) {
+		t.Fatalf("RemoveUpload(invalid) = %v", err)
+	}
+	if err := workspace.RemoveUpload("missing.txt"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("RemoveUpload(missing) = %v", err)
+	}
 }
 
 func TestManagerRemovesOnlyValidatedThreadWorkspace(t *testing.T) {

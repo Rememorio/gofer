@@ -41,6 +41,10 @@ const (
 	ScheduledRead Permission = "scheduled:read"
 	// ScheduledWrite permits creating and changing scheduled tasks.
 	ScheduledWrite Permission = "scheduled:write"
+	// ResourcesRead permits model, feature, skill, upload, and artifact discovery.
+	ResourcesRead Permission = "resources:read"
+	// ResourcesWrite permits skill state changes and file uploads or deletion.
+	ResourcesWrite Permission = "resources:write"
 )
 
 // Principal is an authenticated identity with bounded permissions.
@@ -162,11 +166,8 @@ func GatewayPolicy(request *http.Request) (Permission, bool) {
 	if path == "/healthz" {
 		return "", true
 	}
-	if path == "/api/scheduled-tasks" || strings.HasPrefix(path, "/api/scheduled-tasks/") {
-		if request.Method == http.MethodGet {
-			return ScheduledRead, false
-		}
-		return ScheduledWrite, false
+	if permission, matched := resourcePermission(request); matched {
+		return permission, false
 	}
 	if strings.Contains(path, "/runs/") && strings.HasSuffix(path, "/cancel") {
 		return RunsCancel, false
@@ -190,6 +191,26 @@ func GatewayPolicy(request *http.Request) (Permission, bool) {
 		return ThreadsWrite, false
 	}
 	return Admin, false
+}
+
+func resourcePermission(request *http.Request) (Permission, bool) {
+	path := request.URL.Path
+	resourcePath := path == "/api/models" || strings.HasPrefix(path, "/api/models/") || path == "/api/features" ||
+		path == "/api/skills" || strings.HasPrefix(path, "/api/skills/") ||
+		strings.HasPrefix(path, "/api/threads/") && (strings.Contains(path, "/uploads") || strings.Contains(path, "/artifacts"))
+	if resourcePath {
+		if request.Method == http.MethodGet {
+			return ResourcesRead, true
+		}
+		return ResourcesWrite, true
+	}
+	if path == "/api/scheduled-tasks" || strings.HasPrefix(path, "/api/scheduled-tasks/") {
+		if request.Method == http.MethodGet {
+			return ScheduledRead, true
+		}
+		return ScheduledWrite, true
+	}
+	return "", false
 }
 
 type principalKey struct{}

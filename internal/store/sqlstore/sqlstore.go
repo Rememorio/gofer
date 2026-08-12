@@ -109,6 +109,7 @@ var schema = []string{
 	`CREATE TABLE IF NOT EXISTS gofer_scheduled_tasks (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,thread_id TEXT NOT NULL,title TEXT NOT NULL,prompt TEXT NOT NULL,schedule_type TEXT NOT NULL,schedule TEXT NOT NULL,timezone TEXT NOT NULL,status TEXT NOT NULL,next_run_at TEXT NOT NULL,last_run_at TEXT NOT NULL,last_run_id TEXT NOT NULL,last_error TEXT NOT NULL,lease_owner TEXT NOT NULL,lease_expires_at TEXT NOT NULL,run_count BIGINT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)`,
 	`CREATE INDEX IF NOT EXISTS gofer_scheduled_tasks_due_idx ON gofer_scheduled_tasks(status,next_run_at,lease_expires_at)`,
 	`CREATE INDEX IF NOT EXISTS gofer_scheduled_tasks_user_idx ON gofer_scheduled_tasks(user_id,created_at)`,
+	`CREATE TABLE IF NOT EXISTS gofer_skill_state (category TEXT NOT NULL,name TEXT NOT NULL,enabled BOOLEAN NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(category,name))`,
 }
 
 // CreateThread persists a validated thread transactionally.

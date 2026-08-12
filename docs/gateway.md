@@ -22,7 +22,12 @@ store interface, so transport code does not own model or database behavior.
   `run.created` event, then hands a validated DeerFlow launch envelope to the
   configured starter.
 - Run lookup, cancellation, event history, and SSE streaming use both thread
-and run IDs to enforce resource scoping.
+  and run IDs to enforce resource scoping.
+- Model, feature, and skill discovery never expose provider credentials. Skill
+  state changes are durably stored when a SQL backend is active.
+- Upload and artifact routes resolve through the thread workspace, preserve
+  collision-free names, enforce size and path boundaries, and support HTTP
+  range delivery.
 
 The gateway reserves the `user_id` metadata key for its authenticated owner.
 It is never accepted from or returned to clients. Every thread, run, event,

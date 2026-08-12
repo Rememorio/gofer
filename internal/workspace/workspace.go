@@ -414,6 +414,24 @@ func (workspace *Thread) PutUpload(filename string, reader io.Reader) (Entry, er
 	}
 }
 
+// RemoveUpload deletes one safe filename from the protected uploads directory.
+func (workspace *Thread) RemoveUpload(filename string) error {
+	if workspace == nil || workspace.root == nil || !validFilename(filename) {
+		return fmt.Errorf("%w: unsafe upload filename", ErrInvalidPath)
+	}
+	relative := "uploads/" + filename
+	unlock := workspace.locks.lock(relative)
+	defer unlock()
+	info, err := workspace.root.Stat(localName(relative))
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%w: %s", ErrNotRegular, filename)
+	}
+	return workspace.root.Remove(localName(relative))
+}
+
 // List returns paths below virtualPath up to configured bounds.
 func (workspace *Thread) List(virtualPath string, options ListOptions) (ListResult, error) {
 	relative, err := normalizeVirtualPath(virtualPath)

@@ -88,6 +88,18 @@ func TestCatalogValidation(t *testing.T) {
 	if _, _, err := nilCatalog.Open(thread, "x"); !errors.Is(err, ErrInvalidArtifact) {
 		t.Fatalf("nil Open() error = %v, want ErrInvalidArtifact", err)
 	}
+	metadata, err := Inspect(thread, workspace.OutputsRoot+"/binary")
+	if err != nil || metadata.Size != 2 || metadata.MediaType != "application/octet-stream" {
+		t.Fatalf("Inspect() = %#v, %v", metadata, err)
+	}
+	reader, opened, err := OpenFile(thread, workspace.OutputsRoot+"/binary")
+	if err != nil || opened.Path != metadata.Path {
+		t.Fatalf("OpenFile() = %#v, %v", opened, err)
+	}
+	_ = reader.Close()
+	if _, err = Inspect(thread, workspace.WorkspaceRoot+"/binary"); !errors.Is(err, ErrInvalidArtifact) {
+		t.Fatalf("Inspect(private) = %v", err)
+	}
 }
 
 func testWorkspace(t *testing.T) *workspace.Thread {

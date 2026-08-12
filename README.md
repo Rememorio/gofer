@@ -29,6 +29,9 @@ The durable service boundary now includes DeerFlow-shaped thread and run
 responses, resumable run-event SSE, and transactional SQLite/PostgreSQL stores.
 Owner-scoped thread search, patch/delete, run and message feeds, state lookup,
 and journal-backed cross-run conversation continuity are also available.
+Model and feature discovery, durable skill enablement, bounded multipart
+uploads, persistent output discovery, and range-capable artifact delivery are
+exposed through the same owner-scoped API.
 The `gofer serve` command now assembles the model provider, durable store,
 isolated workspaces, sandbox, browser, policy, runtime, gateway, graceful
 shutdown, and Prometheus endpoint into a runnable service. MCP tools, projected

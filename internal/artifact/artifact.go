@@ -140,9 +140,38 @@ func (catalog *Catalog) Open(thread *workspace.Thread, virtualPath string) (io.R
 	return reader, artifact, nil
 }
 
+// Inspect returns one generated or uploaded file without catalog membership.
+func Inspect(thread *workspace.Thread, virtualPath string) (Artifact, error) {
+	if thread == nil || !isPublicPath(virtualPath) {
+		return Artifact{}, ErrInvalidArtifact
+	}
+	entry, err := thread.Inspect(virtualPath)
+	if err != nil {
+		return Artifact{}, err
+	}
+	if entry.Directory {
+		return Artifact{}, ErrInvalidArtifact
+	}
+	return Artifact{ThreadID: thread.ID(), Path: virtualPath, Name: path.Base(virtualPath), MediaType: mediaTypeForPath(virtualPath), Size: entry.Size, ModifiedAt: entry.ModifiedAt}, nil
+}
+
+// OpenFile opens one generated or uploaded regular file for HTTP streaming.
+func OpenFile(thread *workspace.Thread, virtualPath string) (io.ReadCloser, Artifact, error) {
+	metadata, err := Inspect(thread, virtualPath)
+	if err != nil {
+		return nil, Artifact{}, err
+	}
+	reader, err := thread.OpenFile(virtualPath)
+	return reader, metadata, err
+}
+
 func isOutputPath(virtualPath string) bool {
 	return strings.HasPrefix(virtualPath, workspace.OutputsRoot+"/") &&
 		path.Clean(virtualPath) == virtualPath
+}
+
+func isPublicPath(virtualPath string) bool {
+	return (strings.HasPrefix(virtualPath, workspace.OutputsRoot+"/") || strings.HasPrefix(virtualPath, workspace.UploadsRoot+"/")) && path.Clean(virtualPath) == virtualPath
 }
 
 func mediaTypeForPath(virtualPath string) string {

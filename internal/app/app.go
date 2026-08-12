@@ -63,6 +63,7 @@ type Service struct {
 	metrics    *observe.Registry
 	handler    http.Handler
 	logger     *slog.Logger
+	resources  sync.Mutex
 
 	mu         sync.Mutex
 	active     map[domain.RunID]context.CancelFunc
@@ -143,9 +144,13 @@ func (service *Service) openAgentExtensions() error {
 		service.memories = memory.NewInMemory()
 	}
 	if service.config.Skills.Enabled {
+		var state skill.StateStore
+		if provider, ok := service.store.(interface{ SkillState() skill.StateStore }); ok {
+			state = provider.SkillState()
+		}
 		catalog, err := skill.NewCatalog(skill.Config{
 			Root: service.config.Skills.Root, MaxDocumentBytes: service.config.Skills.MaxDocumentBytes,
-			MaxPackageBytes: service.config.Skills.MaxPackageBytes,
+			MaxPackageBytes: service.config.Skills.MaxPackageBytes, State: state,
 		})
 		if err != nil {
 			return err
@@ -272,6 +277,7 @@ func (service *Service) openHandler() error {
 	apiMux := http.NewServeMux()
 	apiMux.Handle("/", gatewayHandler)
 	service.schedulerRoutes(apiMux)
+	service.resourceRoutes(apiMux)
 	var api http.Handler = apiMux
 	if service.config.Auth.Enabled {
 		authenticator, authErr := buildAuthenticator(service.config.Auth)

@@ -84,6 +84,39 @@ GET /api/threads/{thread_id}/runs/{run_id}/events
 GET /api/threads/{thread_id}/runs/{run_id}/stream
 ```
 
+Clients can discover configured capabilities and manage runtime skills without
+receiving provider credentials:
+
+```text
+GET  /api/models
+GET  /api/models/{model_name}
+GET  /api/features
+GET  /api/skills
+GET  /api/skills/{skill_name}
+POST /api/skills/{skill_name}/enable
+POST /api/skills/{skill_name}/disable
+POST /api/skills/reload
+```
+
+Skill changes are serialized, persisted by SQL stores, and projected
+atomically. A failed projection rolls the requested state change back.
+
+Thread files use bounded multipart uploads and stable virtual paths:
+
+```text
+POST   /api/threads/{thread_id}/uploads
+GET    /api/threads/{thread_id}/uploads/limits
+GET    /api/threads/{thread_id}/uploads/list
+DELETE /api/threads/{thread_id}/uploads/{filename}
+GET    /api/threads/{thread_id}/artifacts
+GET    /api/threads/{thread_id}/artifacts/{virtual_path}
+```
+
+Duplicate upload names are made collision-free. Artifact responses support
+HTTP ranges and force active HTML or SVG content to download with MIME
+sniffing disabled. With authentication enabled, these routes require
+`resources:read` or `resources:write` and remain scoped to the thread owner.
+
 SSE sequence numbers are emitted as event IDs; clients may reconnect with
 `Last-Event-ID`. Health is public at `/healthz`. Prometheus text exposition is
 available at `/metrics`. When bearer authentication is enabled, all API routes
