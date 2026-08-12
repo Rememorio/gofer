@@ -254,3 +254,18 @@ func reasonPointer(reason UnavailableReason) *UnavailableReason {
 	}
 	return &reason
 }
+
+func changedRegularOutputPaths(before, after *Snapshot) []string {
+	paths := make([]string, 0)
+	for virtualPath, file := range after.Files {
+		if file.Root != "outputs" || file.Symlink {
+			continue
+		}
+		previous, exists := before.Files[virtualPath]
+		if !exists || !sameFile(previous, file) {
+			paths = append(paths, virtualPath)
+		}
+	}
+	sort.Strings(paths)
+	return paths
+}

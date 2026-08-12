@@ -21,6 +21,7 @@ import (
 	"github.com/Rememorio/gofer/internal/contextwindow"
 	"github.com/Rememorio/gofer/internal/control"
 	"github.com/Rememorio/gofer/internal/conversation"
+	"github.com/Rememorio/gofer/internal/delivery"
 	"github.com/Rememorio/gofer/internal/domain"
 	"github.com/Rememorio/gofer/internal/event"
 	"github.com/Rememorio/gofer/internal/feedback"
@@ -439,15 +440,16 @@ func (service *Service) execute(ctx context.Context, launch gateway.StartRequest
 	} else {
 		defer func() { _ = baseline.Close() }()
 	}
-	registry, middleware, children, err := service.buildTools(threadWorkspace, launch, provider)
+	deliveryTracker := delivery.NewTracker()
+	registry, middleware, children, err := service.buildTools(threadWorkspace, launch, provider, deliveryTracker)
 	if err != nil {
 		service.failPending(launch, err)
 		return
 	}
 	defer func() { _ = children.Close() }()
-	finishHooks := []runtime.FinishHook{subagentFinishHook(children)}
-	if baseline != nil {
-		finishHooks = append(finishHooks, service.workspaceFinishHook(threadWorkspace, baseline, launch.RunID))
+	finishHooks := []runtime.FinishHook{
+		subagentFinishHook(children),
+		service.deliveryFinishHook(threadWorkspace, baseline, deliveryTracker, launch.RunID),
 	}
 	if service.skills != nil {
 		settings.system = strings.TrimSpace(settings.system + "\n\n" + service.skills.IndexPrompt())
@@ -495,7 +497,7 @@ func (service *Service) prepareConversation(ctx context.Context, launch gateway.
 	return combined, nil
 }
 
-func (service *Service) buildTools(threadWorkspace *workspace.Thread, launch gateway.StartRequest, provider configuredProvider) (*tool.Registry, []runtime.Middleware, *subagent.Manager, error) {
+func (service *Service) buildTools(threadWorkspace *workspace.Thread, launch gateway.StartRequest, provider configuredProvider, observers ...runtime.Middleware) (*tool.Registry, []runtime.Middleware, *subagent.Manager, error) {
 	registry := tool.NewRegistry()
 	if err := service.registerCoreTools(registry, threadWorkspace, launch); err != nil {
 		return nil, nil, nil, err
@@ -503,7 +505,7 @@ func (service *Service) buildTools(threadWorkspace *workspace.Thread, launch gat
 	if err := service.registerExtensionTools(registry, launch.ThreadID); err != nil {
 		return nil, nil, nil, err
 	}
-	children, err := service.newSubagents(threadWorkspace, launch, provider)
+	children, err := service.newSubagents(threadWorkspace, launch, provider, observers)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -516,6 +518,7 @@ func (service *Service) buildTools(threadWorkspace *workspace.Thread, launch gat
 		_ = children.Close()
 		return nil, nil, nil, err
 	}
+	middleware = append(middleware, observers...)
 	return registry, middleware, children, nil
 }
 
@@ -661,12 +664,13 @@ func (service *Service) failPending(launch gateway.StartRequest, cause error) {
 	if err != nil {
 		return
 	}
+	sequence = service.appendEmptyDelivery(ctx, launch, committed[len(committed)-1].Sequence)
 	failed, err := service.store.TransitionRun(ctx, launch.RunID, domain.RunRunning, domain.RunFailed, time.Now(), cause.Error())
 	if err != nil {
 		return
 	}
 	draft, _ := event.NewDraft(launch.ThreadID, launch.RunID, event.RunFailed, failed.FinishedAt, map[string]string{"error": cause.Error()})
-	_, _ = service.store.Append(ctx, launch.RunID, committed[len(committed)-1].Sequence, draft)
+	_, _ = service.store.Append(ctx, launch.RunID, sequence, draft)
 }
 
 func (service *Service) settlePending(launch gateway.StartRequest, cause error) {
@@ -692,8 +696,23 @@ func (service *Service) settlePending(launch gateway.StartRequest, cause error) 
 	if len(records) > 0 {
 		sequence = records[len(records)-1].Sequence
 	}
+	sequence = service.appendEmptyDelivery(ctx, launch, sequence)
 	draft, _ := event.NewDraft(launch.ThreadID, launch.RunID, event.RunCancelled, run.FinishedAt, map[string]string{"error": cause.Error()})
 	_, _ = service.store.Append(ctx, launch.RunID, sequence, draft)
+}
+
+func (service *Service) appendEmptyDelivery(ctx context.Context, launch gateway.StartRequest, sequence uint64) uint64 {
+	payload := delivery.EventPayload{Category: delivery.EventCategory, Content: delivery.EmptyReceipt()}
+	draft, err := event.NewDraft(launch.ThreadID, launch.RunID, event.RunDelivery, time.Now(), payload)
+	if err != nil {
+		return sequence
+	}
+	records, err := service.store.Append(ctx, launch.RunID, sequence, draft)
+	if err != nil {
+		service.logger.Warn("empty delivery receipt failed", "run_id", launch.RunID, "error", err)
+		return sequence
+	}
+	return records[len(records)-1].Sequence
 }
 
 // Cancel requests cancellation of an active run, including a not-yet-started run.

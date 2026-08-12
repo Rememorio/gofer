@@ -32,7 +32,7 @@ func TestCaptureAndCompareTextChanges(t *testing.T) {
 	writeWorkspace(t, thread, workspace.WorkspaceRoot+"/draft.md", "alpha\ngamma\n")
 	removeWorkspaceFile(t, thread, "workspace/old.txt")
 	writeWorkspace(t, thread, workspace.OutputsRoot+"/report.md", "# Report\n\nReady\n")
-	result, err := CompareCurrent(thread, before, Limits{})
+	result, outputPaths, err := ReviewCurrent(thread, before, Limits{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,6 +45,9 @@ func TestCaptureAndCompareTextChanges(t *testing.T) {
 		changes[workspace.OutputsRoot+"/report.md"].Status != StatusCreated ||
 		changes[workspace.WorkspaceRoot+"/old.txt"].Status != StatusDeleted {
 		t.Fatalf("changes = %#v", changes)
+	}
+	if len(outputPaths) != 1 || outputPaths[0] != workspace.OutputsRoot+"/report.md" {
+		t.Fatalf("changed outputs = %#v", outputPaths)
 	}
 	if err = before.Close(); err != nil {
 		t.Fatal(err)
@@ -160,6 +163,30 @@ func TestCompareAppliesFileScanAndDiffBounds(t *testing.T) {
 	defer func() { _ = limited.Close() }()
 	if !limited.Truncated || len(limited.Files) != 1 {
 		t.Fatalf("limited snapshot = %#v", limited)
+	}
+}
+
+func TestProducedOutputsAreIndependentFromReviewFileLimit(t *testing.T) {
+	t.Parallel()
+	thread := testWorkspace(t)
+	limits := Limits{MaxFiles: 1}
+	before, err := Capture(thread, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = before.Close() }()
+	writeWorkspace(t, thread, workspace.OutputsRoot+"/a.txt", "a")
+	writeWorkspace(t, thread, workspace.OutputsRoot+"/z.txt", "z")
+	result, outputs, err := ReviewCurrent(thread, before, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Files) != 1 || !result.Summary.Truncated {
+		t.Fatalf("review = %#v", result)
+	}
+	want := []string{workspace.OutputsRoot + "/a.txt", workspace.OutputsRoot + "/z.txt"}
+	if len(outputs) != len(want) || outputs[0] != want[0] || outputs[1] != want[1] {
+		t.Fatalf("outputs = %#v, want %#v", outputs, want)
 	}
 }
 

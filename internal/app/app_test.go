@@ -258,10 +258,18 @@ func TestServicePersistsInvalidLaunchAsFailed(t *testing.T) {
 	if !strings.Contains(run.Error, "model alias") {
 		t.Fatalf("run error = %q", run.Error)
 	}
+	if receipt, kinds := runDeliveryReceipt(t, service, runID); receipt.Verdict != nil {
+		t.Fatalf("preflight receipt = %#v", receipt)
+	} else {
+		assertOrderedKinds(t, kinds, event.RunStarted, event.RunDelivery, event.RunFailed)
+	}
 	invalidID := createRun(t, server.URL, threadID, `{"input":{"messages":[]}}`, "")
 	invalid := waitRun(t, server.URL, threadID, invalidID, domain.RunFailed, "")
 	if !strings.Contains(invalid.Error, "messages are required") {
 		t.Fatalf("invalid error = %q", invalid.Error)
+	}
+	if receipt, _ := runDeliveryReceipt(t, service, invalidID); receipt.Presented != 0 || receipt.Verdict != nil {
+		t.Fatalf("invalid receipt = %#v", receipt)
 	}
 }
 
@@ -314,6 +322,9 @@ func TestServiceCancellationAndAuthentication(t *testing.T) {
 		t.Fatalf("cancel status = %d", response.StatusCode)
 	}
 	waitRun(t, server.URL, threadID, runID, domain.RunCancelled, authorization)
+	if _, kinds := runDeliveryReceipt(t, service, runID); !containsKind(kinds, event.RunDelivery) {
+		t.Fatalf("cancelled run event kinds = %#v", kinds)
+	}
 }
 
 func TestServiceImmediateCancellationSettlesPendingRun(t *testing.T) {

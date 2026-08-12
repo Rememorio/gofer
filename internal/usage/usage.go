@@ -106,7 +106,7 @@ func Summarize(records []event.Event) RunSummary {
 			addSubagentUsage(&summary, record, seenSubagents)
 		case event.RunStarted, event.RunInterrupted, event.RunCompleted, event.RunFailed,
 			event.RunCancelled, event.MessageStarted, event.MessageDelta, event.ToolStarted,
-			event.ToolFailed, event.CheckpointSaved, event.WorkspaceChanges:
+			event.ToolFailed, event.CheckpointSaved, event.WorkspaceChanges, event.RunDelivery:
 		}
 	}
 	return summary

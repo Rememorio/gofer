@@ -22,6 +22,7 @@ type childExecutor struct {
 	workspace *workspace.Thread
 	launch    gateway.StartRequest
 	provider  configuredProvider
+	observers []runtime.Middleware
 }
 
 func subagentFinishHook(manager *subagent.Manager) runtime.FinishHook {
@@ -30,10 +31,13 @@ func subagentFinishHook(manager *subagent.Manager) runtime.FinishHook {
 	})
 }
 
-func (service *Service) newSubagents(threadWorkspace *workspace.Thread, launch gateway.StartRequest, provider configuredProvider) (*subagent.Manager, error) {
+func (service *Service) newSubagents(threadWorkspace *workspace.Thread, launch gateway.StartRequest, provider configuredProvider, observers []runtime.Middleware) (*subagent.Manager, error) {
 	parallel := min(service.config.Runtime.MaxParallelTools, service.config.Runtime.MaxSubagents)
 	return subagent.NewManager(service.ctx, subagent.Config{
-		Executor:    childExecutor{service: service, workspace: threadWorkspace, launch: launch, provider: provider},
+		Executor: childExecutor{
+			service: service, workspace: threadWorkspace, launch: launch, provider: provider,
+			observers: append([]runtime.Middleware(nil), observers...),
+		},
 		MaxParallel: parallel, MaxChildren: service.config.Runtime.MaxSubagents,
 		MaxDepth: service.config.Runtime.MaxSubagentDepth,
 	})
@@ -121,6 +125,7 @@ func (executor childExecutor) childTools() (*tool.Registry, []runtime.Middleware
 	if err != nil {
 		return nil, nil, err
 	}
+	middleware = append(middleware, executor.observers...)
 	return registry, middleware, nil
 }
 

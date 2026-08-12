@@ -51,6 +51,10 @@ Each run also records a bounded review of files changed below its workspace and
 outputs roots. Text receives a unified diff, while secret-looking, binary,
 large, and symlink paths remain metadata-only; uploads and transient process
 feedback are excluded.
+Terminal `run.delivery` receipts attribute presented artifacts by tool and
+verify that every successful run which changed outputs explicitly delivered at
+least one matching file. Missing or unverifiable delivery becomes a durable
+run failure instead of silently stranding an output on disk.
 The `gofer serve` command now assembles the model provider, durable store,
 isolated workspaces, sandbox, browser, policy, runtime, gateway, graceful
 shutdown, and Prometheus endpoint into a runnable service. MCP tools, projected

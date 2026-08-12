@@ -70,6 +70,13 @@ func TestWorkspaceChangesKindIsStable(t *testing.T) {
 	}
 }
 
+func TestRunDeliveryKindIsStable(t *testing.T) {
+	t.Parallel()
+	if RunDelivery != "run.delivery" || !RunDelivery.valid() {
+		t.Fatalf("RunDelivery = %q", RunDelivery)
+	}
+}
+
 func TestNewDraftReportsEncodingFailure(t *testing.T) {
 	t.Parallel()
 

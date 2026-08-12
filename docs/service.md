@@ -147,6 +147,13 @@ cannot race and hide the final `run.completed`, `run.failed`, or
 `run.cancelled` event. Posting an existing stream with `action=interrupt` or
 `action=rollback` requests cancellation; `wait=1` waits for terminal state.
 
+Before that terminal event, every run emits one `run.delivery` receipt. Its
+base fields report the artifact paths returned by presentation-capable tools
+and group them by tool. If the run created or modified output files, the receipt
+also verifies that `present_files` covered at least one produced path. An
+otherwise successful run fails with an artifact-delivery error when no match
+exists, preventing generated files from being silently left undisclosed.
+
 Provider usage is available on individual run responses and as a thread
 aggregate:
 

@@ -7,9 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Rememorio/gofer/internal/delivery"
 	"github.com/Rememorio/gofer/internal/domain"
 	"github.com/Rememorio/gofer/internal/gateway"
 	"github.com/Rememorio/gofer/internal/model"
+	"github.com/Rememorio/gofer/internal/runtime"
 	"github.com/Rememorio/gofer/internal/subagent"
 	"github.com/Rememorio/gofer/internal/workspace"
 )
@@ -108,6 +110,24 @@ func TestSubagentFinishHookCancelsAndDrainsChildren(t *testing.T) {
 	}
 	if _, err = manager.Spawn(context.Background(), subagent.Request{Prompt: "again", Depth: 1}); !errors.Is(err, subagent.ErrClosed) {
 		t.Fatalf("Spawn after finish = %v", err)
+	}
+}
+
+func TestChildExecutorSharesRunObservers(t *testing.T) {
+	t.Parallel()
+	service, threadWorkspace, launch := subagentFixture(t)
+	tracker := delivery.NewTracker()
+	executor := childExecutor{
+		service: service, workspace: threadWorkspace, launch: launch,
+		provider:  service.providers["primary"],
+		observers: []runtime.Middleware{tracker},
+	}
+	_, middleware, err := executor.childTools()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(middleware) == 0 || middleware[len(middleware)-1] != tracker {
+		t.Fatalf("child middleware = %#v", middleware)
 	}
 }
 

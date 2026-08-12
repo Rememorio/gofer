@@ -75,23 +75,32 @@ func Capture(thread *workspace.Thread, limits Limits) (*Snapshot, error) {
 // CompareCurrent captures only changed post-run text and compares it with a
 // baseline. The caller retains ownership of before and must close it.
 func CompareCurrent(thread *workspace.Thread, before *Snapshot, limits Limits) (Result, error) {
+	result, _, err := ReviewCurrent(thread, before, limits)
+	return result, err
+}
+
+// ReviewCurrent compares a baseline and independently returns every changed
+// regular output within the scan bound. Produced paths are not limited by the
+// smaller user-facing file-detail bound.
+func ReviewCurrent(thread *workspace.Thread, before *Snapshot, limits Limits) (Result, []string, error) {
 	if before == nil {
-		return Result{}, fmt.Errorf("%w: baseline is required", ErrInvalidWorkspace)
+		return Result{}, nil, fmt.Errorf("%w: baseline is required", ErrInvalidWorkspace)
 	}
 	resolved, roots, err := prepareScan(thread, limits)
 	if err != nil {
-		return Result{}, err
+		return Result{}, nil, err
 	}
 	metadata, err := scan(roots, scanOptions{limits: resolved})
 	if err != nil {
-		return Result{}, err
+		return Result{}, nil, err
 	}
 	paths := changedPaths(before, metadata)
 	after, err := scan(roots, scanOptions{limits: resolved, includeText: true, textPaths: paths})
 	if err != nil {
-		return Result{}, err
+		return Result{}, nil, err
 	}
-	return Compare(before, after, resolved)
+	result, err := Compare(before, after, resolved)
+	return result, changedRegularOutputPaths(before, metadata), err
 }
 
 func prepareScan(thread *workspace.Thread, limits Limits) (Limits, []scanRoot, error) {

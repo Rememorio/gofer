@@ -50,6 +50,9 @@ store interface, so transport code does not own model or database behavior.
 - `GET /api/threads/{thread_id}/runs/{run_id}/workspace-changes` returns the
   latest journaled workspace/output review. `include_files=false` keeps only
   the summary, while `include_diff=false` retains file metadata without text.
+- Every service-finalized journal contains a `run.delivery` fact before its terminal
+  event. Runs that changed outputs add a presentation verdict; incomplete
+  delivery converts an otherwise successful run to an error.
 
 The gateway reserves the `user_id` metadata key for its authenticated owner.
 It is never accepted from or returned to clients. Every thread, run, event,
@@ -108,6 +111,27 @@ The endpoint reads the immutable journal, so the same result survives restart
 under the in-memory, SQLite, and PostgreSQL adapters. Runs without changes—or
 legacy runs without a review event—return `available: false` with a stable
 versioned empty shape.
+
+## Output delivery receipts
+
+A run-scoped, concurrency-safe tracker observes successful artifact-producing
+tool results from the lead agent and its child agents. The terminal
+`run.delivery` event always contains `presented`, ordered `paths`, and a
+`by_tool` map. Early preflight failures and cancellations receive the same
+zero-presentation receipt shape.
+
+When the workspace review finds a regular file created or modified below
+`/mnt/user-data/outputs`, the receipt also records `produced_paths`, the paths
+attributed specifically to `present_files`, their intersection, a stage, and a
+boolean verdict. Produced-path detection uses the complete bounded scan rather
+than the smaller file-detail page, so response truncation cannot alter the
+verdict. Presenting an unrelated pre-existing file is not sufficient.
+The receipt is persisted before `run.completed`, `run.failed`, or
+`run.cancelled`; short retries cover transient journal failures. A missing
+match changes an otherwise successful run to failed. If changed outputs were
+successfully presented but their receipt cannot be persisted, the run also
+fails because delivery cannot be durably verified. Receipt failure remains
+best effort for chat-only runs with no changed outputs.
 
 The launch envelope supports input, command, assistant, metadata, config,
 context, checkpoint, interrupt, stream, disconnect, and multitask fields.

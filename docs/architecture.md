@@ -37,6 +37,7 @@ Planned package groups:
 | `internal/control` | Optimistic per-thread goals and ordered todo plans |
 | `internal/event` | Typed immutable events and ordered journal contracts |
 | `internal/feedback` | Owner-scoped run ratings, comments, and aggregate statistics |
+| `internal/delivery` | Run-scoped presentation tracking and terminal output verification |
 | `internal/thread` | Threads, messages, history, and checkpoints |
 | `internal/model` | Normalized model request, response, stream, and usage types |
 | `internal/usage` | Journal-derived run/thread token accounting and caller attribution |
@@ -81,3 +82,4 @@ Planned package groups:
 17. Conversation branches never mutate their source or expose files newer than the selected turn.
 18. Token totals are derived from immutable provider usage events and never double-count cache or reasoning detail.
 19. Workspace reviews drain child agents and commit before the terminal event; sensitive or unbounded content never enters the journal.
+20. Every service-finalized run has one delivery receipt; a successful run that changed outputs must have presented a matching path.
