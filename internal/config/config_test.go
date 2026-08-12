@@ -123,6 +123,22 @@ func TestValidateRejectsInvalidConfigurations(t *testing.T) {
 		{name: "browser viewport height high", mutate: func(config *Config) { config.Browser.ViewportHeight = 4321 }},
 		{name: "browser executable NUL", mutate: func(config *Config) { config.Browser.ExecutablePath = "chrome\x00" }},
 		{name: "browser remote NUL", mutate: func(config *Config) { config.Browser.RemoteURL = "ws://chrome\x00" }},
+		{name: "auth missing tokens", mutate: func(config *Config) { config.Auth.Enabled = true }},
+		{name: "auth short secret", mutate: func(config *Config) {
+			config.Auth = AuthConfig{Enabled: true, Tokens: []AuthTokenConfig{{Secret: "short", PrincipalID: "u", Permissions: []string{"admin"}}}}
+		}},
+		{name: "auth duplicate principal", mutate: func(config *Config) {
+			token := AuthTokenConfig{Secret: "012345678901234567890123", PrincipalID: "u", Permissions: []string{"admin"}}
+			config.Auth = AuthConfig{Enabled: true, Tokens: []AuthTokenConfig{token, token}}
+		}},
+		{name: "scheduler poll", mutate: func(config *Config) { config.Scheduler.PollIntervalSeconds = 0 }},
+		{name: "scheduler lease", mutate: func(config *Config) {
+			config.Scheduler.LeaseDurationSeconds = 1
+			config.Scheduler.PollIntervalSeconds = 2
+		}},
+		{name: "scheduler batch", mutate: func(config *Config) { config.Scheduler.BatchSize = 1001 }},
+		{name: "channel inflight", mutate: func(config *Config) { config.Channels.MaxInflight = 0 }},
+		{name: "channel dedupe", mutate: func(config *Config) { config.Channels.DedupeTTLSeconds = 59 }},
 		{name: "model field", mutate: func(config *Config) { config.Models = []ModelConfig{{Name: "x"}} }},
 		{name: "model duplicate", mutate: func(config *Config) {
 			config.Models = []ModelConfig{{Name: "x", Provider: "p", Model: "m"}, {Name: "x", Provider: "p", Model: "m"}}

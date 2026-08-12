@@ -27,6 +27,9 @@ hierarchically scoped memory recall, safe conversation compaction, and bounded
 parallel child agents with ordered lifecycle events.
 The durable service boundary now includes DeerFlow-shaped thread and run
 responses, resumable run-event SSE, and transactional SQLite/PostgreSQL stores.
+Service control primitives include digest-only bearer credentials and RBAC,
+leased cron/one-shot scheduling, authenticated channel normalization,
+dependency-ordered extensions, and bounded-cardinality Prometheus metrics.
 
 ## Design
 
@@ -50,6 +53,7 @@ The long-running task primitives are documented in
 [Task control](docs/task-control.md).
 HTTP contracts and persistence behavior are documented in
 [Gateway and persistence](docs/gateway.md).
+Operational boundaries are documented in [Service control plane](docs/control-plane.md).
 
 ## Development
 

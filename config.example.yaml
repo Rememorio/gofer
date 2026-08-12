@@ -38,6 +38,21 @@ browser:
   viewport_width: 1280
   viewport_height: 720
 
+auth:
+  enabled: false
+  tokens: []
+
+scheduler:
+  enabled: false
+  poll_interval_seconds: 5
+  lease_duration_seconds: 300
+  batch_size: 32
+
+channels:
+  enabled: false
+  max_inflight: 32
+  dedupe_ttl_seconds: 86400
+
 models:
   - name: primary
     provider: openai

@@ -24,14 +24,17 @@ var (
 
 // Config is Gofer's versioned root configuration.
 type Config struct {
-	Version  int           `yaml:"config_version" json:"config_version"`
-	LogLevel string        `yaml:"log_level" json:"log_level"`
-	Server   ServerConfig  `yaml:"server" json:"server"`
-	Runtime  RuntimeConfig `yaml:"runtime" json:"runtime"`
-	Storage  StorageConfig `yaml:"storage" json:"storage"`
-	Sandbox  SandboxConfig `yaml:"sandbox" json:"sandbox"`
-	Browser  BrowserConfig `yaml:"browser" json:"browser"`
-	Models   []ModelConfig `yaml:"models" json:"models"`
+	Version   int             `yaml:"config_version" json:"config_version"`
+	LogLevel  string          `yaml:"log_level" json:"log_level"`
+	Server    ServerConfig    `yaml:"server" json:"server"`
+	Runtime   RuntimeConfig   `yaml:"runtime" json:"runtime"`
+	Storage   StorageConfig   `yaml:"storage" json:"storage"`
+	Sandbox   SandboxConfig   `yaml:"sandbox" json:"sandbox"`
+	Browser   BrowserConfig   `yaml:"browser" json:"browser"`
+	Auth      AuthConfig      `yaml:"auth" json:"auth"`
+	Scheduler SchedulerConfig `yaml:"scheduler" json:"scheduler"`
+	Channels  ChannelsConfig  `yaml:"channels" json:"channels"`
+	Models    []ModelConfig   `yaml:"models" json:"models"`
 }
 
 // ServerConfig controls the HTTP gateway listener.
@@ -83,6 +86,34 @@ type BrowserConfig struct {
 	ViewportHeight        int    `yaml:"viewport_height" json:"viewport_height"`
 }
 
+// AuthConfig controls optional bearer authentication at the HTTP boundary.
+type AuthConfig struct {
+	Enabled bool              `yaml:"enabled" json:"enabled"`
+	Tokens  []AuthTokenConfig `yaml:"tokens" json:"-"`
+}
+
+// AuthTokenConfig maps one opaque secret to a principal and permissions.
+type AuthTokenConfig struct {
+	Secret      string   `yaml:"secret" json:"-"`
+	PrincipalID string   `yaml:"principal_id" json:"principal_id"`
+	Permissions []string `yaml:"permissions" json:"permissions"`
+}
+
+// SchedulerConfig controls leased scheduled-task dispatch.
+type SchedulerConfig struct {
+	Enabled              bool `yaml:"enabled" json:"enabled"`
+	PollIntervalSeconds  int  `yaml:"poll_interval_seconds" json:"poll_interval_seconds"`
+	LeaseDurationSeconds int  `yaml:"lease_duration_seconds" json:"lease_duration_seconds"`
+	BatchSize            int  `yaml:"batch_size" json:"batch_size"`
+}
+
+// ChannelsConfig controls normalized inbound message dispatch.
+type ChannelsConfig struct {
+	Enabled          bool `yaml:"enabled" json:"enabled"`
+	MaxInflight      int  `yaml:"max_inflight" json:"max_inflight"`
+	DedupeTTLSeconds int  `yaml:"dedupe_ttl_seconds" json:"dedupe_ttl_seconds"`
+}
+
 // ModelConfig names one model exposed to agent runs.
 type ModelConfig struct {
 	Name     string         `yaml:"name" json:"name"`
@@ -129,6 +160,9 @@ func Defaults() Config {
 			MaxSessions: 32, IdleTimeoutSeconds: 1800, ActionTimeoutSeconds: 30,
 			ViewportWidth: 1280, ViewportHeight: 720,
 		},
+		Auth:      AuthConfig{},
+		Scheduler: SchedulerConfig{PollIntervalSeconds: 5, LeaseDurationSeconds: 300, BatchSize: 32},
+		Channels:  ChannelsConfig{MaxInflight: 32, DedupeTTLSeconds: 86400},
 	}
 }
 
@@ -194,7 +228,33 @@ func (config Config) Validate() error {
 	if err := validateBrowser(config.Browser); err != nil {
 		return err
 	}
+	if err := validateServices(config.Auth, config.Scheduler, config.Channels); err != nil {
+		return err
+	}
 	return validateModels(config.Models)
+}
+
+func validateServices(auth AuthConfig, scheduler SchedulerConfig, channels ChannelsConfig) error {
+	if auth.Enabled && len(auth.Tokens) == 0 {
+		return fmt.Errorf("%w: auth tokens are required when enabled", ErrInvalid)
+	}
+	principals := make(map[string]struct{}, len(auth.Tokens))
+	for _, token := range auth.Tokens {
+		if len(strings.TrimSpace(token.Secret)) < 24 || strings.TrimSpace(token.PrincipalID) == "" || len(token.Permissions) == 0 {
+			return fmt.Errorf("%w: invalid auth token", ErrInvalid)
+		}
+		if _, exists := principals[token.PrincipalID]; exists {
+			return fmt.Errorf("%w: duplicate auth principal", ErrInvalid)
+		}
+		principals[token.PrincipalID] = struct{}{}
+	}
+	if scheduler.PollIntervalSeconds < 1 || scheduler.LeaseDurationSeconds < scheduler.PollIntervalSeconds || scheduler.BatchSize < 1 || scheduler.BatchSize > 1000 {
+		return fmt.Errorf("%w: invalid scheduler limits", ErrInvalid)
+	}
+	if channels.MaxInflight < 1 || channels.MaxInflight > 10_000 || channels.DedupeTTLSeconds < 60 {
+		return fmt.Errorf("%w: invalid channel limits", ErrInvalid)
+	}
+	return nil
 }
 
 func (config Config) validateCore() error {

@@ -51,6 +51,10 @@ Planned package groups:
 | `internal/store/sqlstore` | Transactional SQLite and PostgreSQL persistence |
 | `internal/gateway` | DeerFlow-compatible REST and SSE transports |
 | `internal/channel` | IM and webhook adapters |
+| `internal/auth` | Bearer authentication, principal context, and RBAC policy |
+| `internal/scheduler` | Cron/one-shot validation, durable leases, and dispatch |
+| `internal/extension` | Dependency-ordered component lifecycle and rollback |
+| `internal/observe` | Bounded-cardinality metrics and Prometheus exposition |
 
 ## Invariants
 
@@ -67,3 +71,5 @@ Planned package groups:
 11. Browser navigation and every intercepted HTTP request pass through the same fail-closed address policy.
 12. Child agents have explicit depth, total-count, and parallelism limits and an owned cancellation path.
 13. Long-term memory retrieval never crosses its authenticated user scope.
+14. Non-public HTTP routes fail closed when authentication or permission is absent.
+15. Scheduled work is dispatched only under an expiring owner lease.
