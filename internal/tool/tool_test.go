@@ -20,7 +20,7 @@ func TestRegistryRegisterAndExecute(t *testing.T) {
 	t.Parallel()
 
 	registry := NewRegistry()
-	definition := Definition{Name: "echo", Description: "Echo text", InputSchema: append(json.RawMessage(nil), echoSchema...), ReadOnly: true}
+	definition := Definition{Name: "echo", Description: "Echo text", InputSchema: append(json.RawMessage(nil), echoSchema...), ReadOnly: true, UntrustedOutput: true}
 	tool := Func{DefinitionValue: definition, ExecuteFunc: func(_ context.Context, arguments json.RawMessage) (json.RawMessage, error) {
 		return append(json.RawMessage(nil), arguments...), nil
 	}}
@@ -32,6 +32,12 @@ func TestRegistryRegisterAndExecute(t *testing.T) {
 	definitions := registry.Definitions()
 	if len(definitions) != 1 || definitions[0].Name != "echo" || !json.Valid(definitions[0].InputSchema) {
 		t.Fatalf("Definitions() = %#v", definitions)
+	}
+	if names := registry.UntrustedOutputTools(); len(names) != 1 || names[0] != "echo" {
+		t.Fatalf("UntrustedOutputTools() = %#v", names)
+	}
+	if names := (*Registry)(nil).UntrustedOutputTools(); names != nil {
+		t.Fatalf("nil UntrustedOutputTools() = %#v", names)
 	}
 	result, err := registry.Execute(context.Background(), domain.ToolCall{
 		ID: "call-1", Name: "echo", Arguments: json.RawMessage(`{"text":"hello"}`),
@@ -50,7 +56,7 @@ func TestRegistryDefinitionsAreSorted(t *testing.T) {
 	registry := NewRegistry()
 	for _, name := range []string{"zeta", "alpha"} {
 		if err := registry.Register(Func{
-			DefinitionValue: Definition{Name: name, Description: name, InputSchema: json.RawMessage(`{"type":"object"}`)},
+			DefinitionValue: Definition{Name: name, Description: name, InputSchema: json.RawMessage(`{"type":"object"}`), UntrustedOutput: true},
 			ExecuteFunc:     func(context.Context, json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{}`), nil },
 		}); err != nil {
 			t.Fatalf("Register(%s): %v", name, err)
@@ -59,6 +65,9 @@ func TestRegistryDefinitionsAreSorted(t *testing.T) {
 	definitions := registry.Definitions()
 	if definitions[0].Name != "alpha" || definitions[1].Name != "zeta" {
 		t.Fatalf("Definitions() = %#v", definitions)
+	}
+	if names := registry.UntrustedOutputTools(); len(names) != 2 || names[0] != "alpha" || names[1] != "zeta" {
+		t.Fatalf("UntrustedOutputTools() = %#v", names)
 	}
 }
 

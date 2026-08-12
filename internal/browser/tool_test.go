@@ -23,6 +23,13 @@ func TestBrowserToolsExecuteStatefulActions(t *testing.T) {
 	t.Parallel()
 
 	fixture := newToolFixture(t)
+	wantUntrusted := []string{
+		"browser_back", "browser_click", "browser_navigate",
+		"browser_scroll", "browser_snapshot", "browser_type",
+	}
+	if got := fixture.registry.UntrustedOutputTools(); !reflect.DeepEqual(got, wantUntrusted) {
+		t.Fatalf("untrusted output tools = %#v, want %#v", got, wantUntrusted)
+	}
 	calls := []struct {
 		name      string
 		arguments string

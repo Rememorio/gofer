@@ -38,6 +38,13 @@ Optional agent extensions are initialized before the listener becomes ready:
   `/mnt/user-data/outputs/.tool-results` while the model receives a typed
   synopsis and bounded raw sample. `read_file` is exempt to prevent spill/read
   loops, and failed persistence falls back to strict inline truncation.
+- Prompt-injection guardrails are always active. The current genuine user
+  message is temporarily wrapped in explicit boundaries and reserved authority
+  tags are escaped before each model call, without changing conversation
+  history. Known remote web tools, browser snapshot tools, and all MCP tools
+  recursively neutralize the same tokens in JSON keys and string values before
+  result budgeting and persistence. Local shell and file results are not
+  rewritten.
 - `subagent_spawn` starts bounded parallel child agents. Each child gets an
   isolated run journal and tool registry while sharing only the parent's
   policy-controlled workspace, configured extensions, and tenant scope. The

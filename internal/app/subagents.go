@@ -121,7 +121,7 @@ func (executor childExecutor) childTools() (*tool.Registry, []runtime.Middleware
 	if err := executor.service.registerExtensionTools(registry, executor.launch.ThreadID); err != nil {
 		return nil, nil, err
 	}
-	middleware, err := executor.service.runtimeMiddleware(executor.launch.ThreadID, executor.provider, executor.workspace)
+	middleware, err := executor.service.runtimeMiddleware(executor.launch.ThreadID, executor.provider, executor.workspace, registry)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -56,6 +56,7 @@ func TestClientConnectRegisterExecute(t *testing.T) {
 		t.Fatalf("tool names = %#v, want %#v", names, wantNames)
 	}
 	definition := tools[0].Definition()
+	assertUntrustedDefinition(t, definition)
 	definition.InputSchema[0] = '['
 	if tools[0].Definition().InputSchema[0] == '[' {
 		t.Fatal("Definition() returned mutable schema alias")
@@ -64,6 +65,9 @@ func TestClientConnectRegisterExecute(t *testing.T) {
 	registry := tool.NewRegistry()
 	if err := client.Register(registry); err != nil {
 		t.Fatalf("Register(): %v", err)
+	}
+	if got := registry.UntrustedOutputTools(); !reflect.DeepEqual(got, wantNames) {
+		t.Fatalf("untrusted output tools = %#v, want %#v", got, wantNames)
 	}
 	result, err := registry.Execute(context.Background(), domain.ToolCall{
 		ID: "call-1", Name: "mcp__alpha__echo_tool", Arguments: json.RawMessage(`{"n":2}`),
@@ -490,6 +494,13 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func assertUntrustedDefinition(t *testing.T, definition tool.Definition) {
+	t.Helper()
+	if !definition.UntrustedOutput {
+		t.Fatal("MCP tool output was not marked untrusted")
+	}
 }
 
 type fakeConnector struct {

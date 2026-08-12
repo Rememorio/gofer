@@ -139,7 +139,7 @@ func (tools Tools) snapshotTool(
 	return tool.Func{
 		DefinitionValue: tool.Definition{
 			Name: name, Description: description, InputSchema: json.RawMessage(schema),
-			ReadOnly: name == "browser_snapshot" || name == "browser_scroll",
+			ReadOnly: name == "browser_snapshot" || name == "browser_scroll", UntrustedOutput: true,
 		},
 		ExecuteFunc: func(ctx context.Context, arguments json.RawMessage) (json.RawMessage, error) {
 			lease, err := tools.Manager.Acquire(ctx, tools.Key)

@@ -26,6 +26,7 @@ import (
 	"github.com/Rememorio/gofer/internal/event"
 	"github.com/Rememorio/gofer/internal/feedback"
 	"github.com/Rememorio/gofer/internal/gateway"
+	"github.com/Rememorio/gofer/internal/guardrail"
 	"github.com/Rememorio/gofer/internal/mcp"
 	"github.com/Rememorio/gofer/internal/memory"
 	"github.com/Rememorio/gofer/internal/model"
@@ -515,7 +516,7 @@ func (service *Service) buildTools(threadWorkspace *workspace.Thread, launch gat
 		_ = children.Close()
 		return nil, nil, nil, err
 	}
-	middleware, err := service.runtimeMiddleware(launch.ThreadID, provider, threadWorkspace)
+	middleware, err := service.runtimeMiddleware(launch.ThreadID, provider, threadWorkspace, registry)
 	if err != nil {
 		_ = children.Close()
 		return nil, nil, nil, err
@@ -568,7 +569,7 @@ func (service *Service) registerExtensionTools(registry *tool.Registry, threadID
 	return nil
 }
 
-func (service *Service) runtimeMiddleware(threadID domain.ThreadID, provider configuredProvider, threadWorkspace *workspace.Thread) ([]runtime.Middleware, error) {
+func (service *Service) runtimeMiddleware(threadID domain.ThreadID, provider configuredProvider, threadWorkspace *workspace.Thread, registry *tool.Registry) ([]runtime.Middleware, error) {
 	descriptors := mergeDescriptors(builtin.PolicyDescriptors(), control.PolicyDescriptors(), sandbox.PolicyDescriptors())
 	if service.browser != nil {
 		descriptors = mergeDescriptors(descriptors, browser.PolicyDescriptors())
@@ -589,7 +590,13 @@ func (service *Service) runtimeMiddleware(threadID domain.ThreadID, provider con
 	if err != nil {
 		return nil, err
 	}
-	middleware := []runtime.Middleware{policyMiddleware, budget}
+	guardrailConfig := guardrail.DefaultConfig()
+	guardrailConfig.RemoteTools = append(guardrailConfig.RemoteTools, registry.UntrustedOutputTools()...)
+	guardrailMiddleware, err := guardrail.New(guardrailConfig)
+	if err != nil {
+		return nil, err
+	}
+	middleware := []runtime.Middleware{policyMiddleware, guardrailMiddleware, budget}
 	if service.memories != nil {
 		memoryMiddleware, memoryErr := memory.NewMiddleware(memory.MiddlewareConfig{
 			Store: service.memories, Scope: memoryScope(threadID), Limit: service.config.Memory.Limit,

@@ -364,6 +364,7 @@ func adaptTool(serverName string, remote *sdk.Tool, remoteSession session) (tool
 	return remoteTool{
 		definition: tool.Definition{
 			Name: exposedName(serverName, remote.Name), Description: description, InputSchema: encodedSchema,
+			UntrustedOutput: true,
 		},
 		remoteName: remote.Name,
 		session:    remoteSession,

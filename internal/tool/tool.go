@@ -44,10 +44,11 @@ func (*ResultError) Error() string { return "tool returned an error result" }
 
 // Definition describes one executable tool and its JSON Schema input contract.
 type Definition struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"input_schema"`
-	ReadOnly    bool            `json:"read_only,omitempty"`
+	Name            string          `json:"name"`
+	Description     string          `json:"description"`
+	InputSchema     json.RawMessage `json:"input_schema"`
+	ReadOnly        bool            `json:"read_only,omitempty"`
+	UntrustedOutput bool            `json:"-"`
 }
 
 // Tool executes validated JSON arguments and returns JSON output.
@@ -148,6 +149,24 @@ func (registry *Registry) Definitions() []model.ToolDefinition {
 		return definitions[left].Name < definitions[right].Name
 	})
 	return definitions
+}
+
+// UntrustedOutputTools returns stable names whose results originate outside
+// Gofer's local trust boundary and must be sanitized before model use.
+func (registry *Registry) UntrustedOutputTools() []string {
+	if registry == nil {
+		return nil
+	}
+	registry.mu.RLock()
+	names := make([]string, 0)
+	for _, registered := range registry.tools {
+		if registered.definition.UntrustedOutput {
+			names = append(names, registered.definition.Name)
+		}
+	}
+	registry.mu.RUnlock()
+	sort.Strings(names)
+	return names
 }
 
 // Execute validates call and invokes its registered tool.

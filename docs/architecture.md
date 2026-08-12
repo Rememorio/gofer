@@ -42,6 +42,7 @@ Planned package groups:
 | `internal/model` | Normalized model request, response, stream, and usage types |
 | `internal/usage` | Journal-derived run/thread token accounting and caller attribution |
 | `internal/tool` | Typed registry, validation, policy, and execution |
+| `internal/guardrail` | Temporary user-input framing and recursive untrusted-result neutralization |
 | `internal/tooloutput` | Typed result synopsis, atomic spill storage, and context-budget fallback |
 | `internal/mcp` | MCP transports, bounded discovery, and namespaced tool adapters |
 | `internal/policy` | Ordered authorization rules and tool resource extraction |
@@ -85,3 +86,5 @@ Planned package groups:
 19. Workspace reviews drain child agents and commit before the terminal event; sensitive or unbounded content never enters the journal.
 20. Every service-finalized run has one delivery receipt; a successful run that changed outputs must have presented a matching path.
 21. Raw tool-result observers run before context transforms; only the bounded transformed result enters the journal and later model requests.
+22. User text stays durable in its original form; every model call receives temporary authority-tag neutralization and explicit user boundaries.
+23. Remote-content results are sanitized before budgeting or persistence, and tool trust classification is explicit metadata rather than a name heuristic.

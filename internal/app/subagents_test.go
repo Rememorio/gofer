@@ -50,7 +50,8 @@ func TestSubagentToolsRunIsolatedChildAgent(t *testing.T) {
 	if task.Status != subagent.Succeeded || task.Output.Text != "child result" || task.Output.Metadata["parent_run_id"] != string(launch.RunID) || task.Output.Metadata["model"] != "test" || task.Output.Metadata["llm_call_count"] != "1" {
 		t.Fatalf("task = %#v", task)
 	}
-	if len(provider.Requests) != 1 || provider.Requests[0].Messages[0].Content[0].Text != "investigate" {
+	const guardedPrompt = "--- BEGIN USER INPUT ---\ninvestigate\n--- END USER INPUT ---"
+	if len(provider.Requests) != 1 || provider.Requests[0].Messages[0].Content[0].Text != guardedPrompt {
 		t.Fatalf("provider requests = %#v", provider.Requests)
 	}
 }

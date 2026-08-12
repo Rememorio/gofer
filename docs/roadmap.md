@@ -8,7 +8,7 @@ module is committed and pushed separately.
 2. **Durable core:** configuration, domain identifiers, typed events, threads,
    runs, checkpoints, and an in-memory reference store.
 3. **Agent loop:** normalized model API, streaming, middleware, tool calls,
-   budgets, cancellation, and deterministic replay.
+   input/result guardrails, budgets, cancellation, and deterministic replay.
 4. **Tools and extensions:** built-ins, MCP client integration, skills, file
    workspace, artifacts, and policy enforcement.
 5. **Execution:** local and container sandboxes with resource and path limits.

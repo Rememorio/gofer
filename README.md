@@ -62,6 +62,12 @@ bounded synopsis with a `read_file` reference; a strict head-and-tail fallback
 applies when persistence is unavailable. Delivery and workspace review inspect
 the original result where necessary but never count these spill files as user
 artifacts.
+Model-facing user input and attacker-influenceable remote tool results now pass
+through structural prompt-injection guardrails. Framework authority tags and
+forged user boundaries are neutralized without changing durable user text;
+browser snapshots and every MCP tool are classified as untrusted by tool
+metadata. Result sanitization runs before output budgeting, while local file
+and shell output remains byte-preserved.
 The `gofer serve` command now assembles the model provider, durable store,
 isolated workspaces, sandbox, browser, policy, runtime, gateway, graceful
 shutdown, and Prometheus endpoint into a runnable service. MCP tools, projected
@@ -98,6 +104,8 @@ HTTP contracts and persistence behavior are documented in
 Operational boundaries are documented in [Service control plane](docs/control-plane.md).
 Tool result externalization and fallback behavior are documented in
 [Tool output budgets](docs/tool-output.md).
+Model-input trust boundaries are documented in
+[Prompt-injection guardrails](docs/guardrails.md).
 
 ## Development
 
