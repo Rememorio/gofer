@@ -402,6 +402,31 @@ func TestWorkspaceResultTruncation(t *testing.T) {
 	}
 }
 
+func TestExecutionMounts(t *testing.T) {
+	t.Parallel()
+
+	workspace := newTestWorkspace(t, Config{})
+	defer func() { _ = workspace.Close() }()
+	mounts := workspace.ExecutionMounts()
+	if len(mounts) != 3 {
+		t.Fatalf("ExecutionMounts() = %#v", mounts)
+	}
+	if mounts[0].VirtualPath != WorkspaceRoot || mounts[0].ReadOnly ||
+		mounts[1].VirtualPath != UploadsRoot || !mounts[1].ReadOnly ||
+		mounts[2].VirtualPath != OutputsRoot || mounts[2].ReadOnly {
+		t.Fatalf("ExecutionMounts() = %#v", mounts)
+	}
+	for _, mount := range mounts {
+		if !filepath.IsAbs(mount.HostPath) {
+			t.Fatalf("host path is not absolute: %q", mount.HostPath)
+		}
+	}
+	var nilWorkspace *Thread
+	if mounts := nilWorkspace.ExecutionMounts(); mounts != nil {
+		t.Fatalf("nil ExecutionMounts() = %#v", mounts)
+	}
+}
+
 func newTestWorkspace(t *testing.T, config Config) *Thread {
 	t.Helper()
 	config.Root = t.TempDir()

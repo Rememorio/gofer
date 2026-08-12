@@ -54,8 +54,18 @@ type StorageConfig struct {
 
 // SandboxConfig selects the host-execution boundary.
 type SandboxConfig struct {
-	Driver string `yaml:"driver" json:"driver"`
-	Image  string `yaml:"image" json:"image,omitempty"`
+	Driver                string  `yaml:"driver" json:"driver"`
+	AllowHostExecution    bool    `yaml:"allow_host_execution" json:"allow_host_execution"`
+	Image                 string  `yaml:"image" json:"image,omitempty"`
+	DockerBinary          string  `yaml:"docker_binary" json:"docker_binary,omitempty"`
+	NetworkEnabled        bool    `yaml:"network_enabled" json:"network_enabled"`
+	CommandTimeoutSeconds int     `yaml:"command_timeout_seconds" json:"command_timeout_seconds"`
+	MaxTimeoutSeconds     int     `yaml:"max_timeout_seconds" json:"max_timeout_seconds"`
+	MaxOutputBytes        int64   `yaml:"max_output_bytes" json:"max_output_bytes"`
+	MaxScriptBytes        int     `yaml:"max_script_bytes" json:"max_script_bytes"`
+	Memory                string  `yaml:"memory" json:"memory,omitempty"`
+	CPUs                  float64 `yaml:"cpus" json:"cpus,omitempty"`
+	PIDsLimit             int     `yaml:"pids_limit" json:"pids_limit,omitempty"`
 }
 
 // ModelConfig names one model exposed to agent runs.
@@ -95,7 +105,11 @@ func Defaults() Config {
 			EventBuffer:      128,
 		},
 		Storage: StorageConfig{Driver: "sqlite", DSN: ".gofer/gofer.db"},
-		Sandbox: SandboxConfig{Driver: "local"},
+		Sandbox: SandboxConfig{
+			Driver: "local", DockerBinary: "docker", CommandTimeoutSeconds: 600,
+			MaxTimeoutSeconds: 3600, MaxOutputBytes: 1 << 20, MaxScriptBytes: 64 << 10,
+			Memory: "1g", CPUs: 2, PIDsLimit: 256,
+		},
 	}
 }
 
@@ -152,6 +166,16 @@ func LoadFile(ctx context.Context, path string, options ...Option) (Config, erro
 
 // Validate verifies the current configuration contract.
 func (config Config) Validate() error {
+	if err := config.validateCore(); err != nil {
+		return err
+	}
+	if err := validateSandbox(config.Sandbox); err != nil {
+		return err
+	}
+	return validateModels(config.Models)
+}
+
+func (config Config) validateCore() error {
 	if config.Version != currentVersion {
 		return fmt.Errorf("%w: config_version must be %d", ErrInvalid, currentVersion)
 	}
@@ -171,13 +195,29 @@ func (config Config) Validate() error {
 	if config.Storage.Driver != "memory" && strings.TrimSpace(config.Storage.DSN) == "" {
 		return fmt.Errorf("%w: storage.dsn is required for %s", ErrInvalid, config.Storage.Driver)
 	}
-	if !oneOf(config.Sandbox.Driver, "local", "docker", "remote") {
-		return fmt.Errorf("%w: unsupported sandbox.driver %q", ErrInvalid, config.Sandbox.Driver)
+	return nil
+}
+
+func validateSandbox(sandbox SandboxConfig) error {
+	if !oneOf(sandbox.Driver, "local", "docker", "remote") {
+		return fmt.Errorf("%w: unsupported sandbox.driver %q", ErrInvalid, sandbox.Driver)
 	}
-	if config.Sandbox.Driver == "docker" && strings.TrimSpace(config.Sandbox.Image) == "" {
+	if sandbox.Driver == "docker" && strings.TrimSpace(sandbox.Image) == "" {
 		return fmt.Errorf("%w: sandbox.image is required for docker", ErrInvalid)
 	}
-	return validateModels(config.Models)
+	if sandbox.CommandTimeoutSeconds <= 0 || sandbox.MaxTimeoutSeconds <= 0 ||
+		sandbox.CommandTimeoutSeconds > sandbox.MaxTimeoutSeconds ||
+		sandbox.MaxOutputBytes <= 0 || sandbox.MaxScriptBytes <= 0 {
+		return fmt.Errorf("%w: sandbox command limits must be positive and ordered", ErrInvalid)
+	}
+	if strings.TrimSpace(sandbox.DockerBinary) == "" || sandbox.CPUs <= 0 ||
+		sandbox.PIDsLimit <= 0 || strings.TrimSpace(sandbox.Memory) == "" {
+		return fmt.Errorf("%w: sandbox runtime and resource settings are required", ErrInvalid)
+	}
+	if sandbox.Driver != "local" && sandbox.AllowHostExecution {
+		return fmt.Errorf("%w: allow_host_execution is only valid for local sandbox", ErrInvalid)
+	}
+	return nil
 }
 
 func validateModels(models []ModelConfig) error {

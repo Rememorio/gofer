@@ -59,3 +59,4 @@ Planned package groups:
 7. Goroutines have an owner and a defined shutdown path.
 8. Extension discovery is bounded and publishes an atomic validated snapshot.
 9. Skill packages never follow symlinks and project into an agent-visible read-only tree.
+10. Host command execution is disabled by default; container execution starts from a read-only, capability-free, network-isolated baseline.

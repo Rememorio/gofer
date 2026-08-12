@@ -16,6 +16,17 @@ storage:
 
 sandbox:
   driver: local
+  # Local command execution is disabled unless explicitly trusted.
+  allow_host_execution: false
+  docker_binary: docker
+  network_enabled: false
+  command_timeout_seconds: 600
+  max_timeout_seconds: 3600
+  max_output_bytes: 1048576
+  max_script_bytes: 65536
+  memory: 1g
+  cpus: 2
+  pids_limit: 256
 
 models:
   - name: primary

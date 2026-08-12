@@ -17,7 +17,8 @@ artifact catalog, built-in file tools, and fail-closed policy middleware are in
 place. MCP servers can contribute validated tools over stdio or Streamable
 HTTP, and Skills packages support strict metadata, persistent enablement,
 progressive discovery, and atomic read-only projection. It is not yet a
-drop-in DeerFlow replacement.
+drop-in DeerFlow replacement. Bounded shell execution is available through a
+fail-closed local driver or hardened ephemeral Docker containers.
 
 ## Design
 
@@ -33,7 +34,9 @@ drop-in DeerFlow replacement.
   extension surfaces ship together by default.
 
 See [Architecture](docs/architecture.md) for the planned component boundaries
-and [Roadmap](docs/roadmap.md) for the implementation sequence.
+and [Roadmap](docs/roadmap.md) for the implementation sequence. Command
+isolation and its trust boundaries are documented in
+[Sandbox](docs/sandbox.md).
 
 ## Development
 

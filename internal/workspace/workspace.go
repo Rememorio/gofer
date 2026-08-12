@@ -100,6 +100,15 @@ type Entry struct {
 	Directory  bool      `json:"directory"`
 }
 
+// ExecutionMount describes one trusted host-to-sandbox directory mapping.
+// HostPath is intended only for infrastructure adapters and must never be
+// exposed to a model or remote API.
+type ExecutionMount struct {
+	VirtualPath string
+	HostPath    string
+	ReadOnly    bool
+}
+
 // ReadOptions selects an inclusive, one-indexed line range.
 type ReadOptions struct {
 	StartLine int
@@ -218,6 +227,20 @@ func (manager *Manager) Open(threadID domain.ThreadID) (*Thread, error) {
 
 // ID returns the owning thread identifier.
 func (workspace *Thread) ID() domain.ThreadID { return workspace.id }
+
+// ExecutionMounts returns the fixed per-thread directories used by command
+// sandboxes. Uploaded files are mounted read-only; working and output files
+// remain writable.
+func (workspace *Thread) ExecutionMounts() []ExecutionMount {
+	if workspace == nil || workspace.hostRoot == "" {
+		return nil
+	}
+	return []ExecutionMount{
+		{VirtualPath: WorkspaceRoot, HostPath: filepath.Join(workspace.hostRoot, "workspace")},
+		{VirtualPath: UploadsRoot, HostPath: filepath.Join(workspace.hostRoot, "uploads"), ReadOnly: true},
+		{VirtualPath: OutputsRoot, HostPath: filepath.Join(workspace.hostRoot, "outputs")},
+	}
+}
 
 // Close releases the traversal-resistant root handle.
 func (workspace *Thread) Close() error {

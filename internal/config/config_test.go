@@ -55,6 +55,9 @@ models:
 	if config.Runtime.MaxTurns != Defaults().Runtime.MaxTurns {
 		t.Fatalf("default runtime was not preserved: %#v", config.Runtime)
 	}
+	if config.Sandbox.CommandTimeoutSeconds != 600 || config.Sandbox.NetworkEnabled {
+		t.Fatalf("default sandbox limits were not preserved: %#v", config.Sandbox)
+	}
 }
 
 func TestLoadRejectsInvalidInput(t *testing.T) {
@@ -95,6 +98,17 @@ func TestValidateRejectsInvalidConfigurations(t *testing.T) {
 		{name: "storage DSN", mutate: func(config *Config) { config.Storage.DSN = "" }},
 		{name: "sandbox driver", mutate: func(config *Config) { config.Sandbox.Driver = "bad" }},
 		{name: "docker image", mutate: func(config *Config) { config.Sandbox.Driver, config.Sandbox.Image = "docker", "" }},
+		{name: "sandbox timeout", mutate: func(config *Config) { config.Sandbox.CommandTimeoutSeconds = 0 }},
+		{name: "sandbox timeout order", mutate: func(config *Config) { config.Sandbox.MaxTimeoutSeconds = 1 }},
+		{name: "sandbox output", mutate: func(config *Config) { config.Sandbox.MaxOutputBytes = 0 }},
+		{name: "sandbox script", mutate: func(config *Config) { config.Sandbox.MaxScriptBytes = 0 }},
+		{name: "sandbox binary", mutate: func(config *Config) { config.Sandbox.DockerBinary = "" }},
+		{name: "sandbox CPU", mutate: func(config *Config) { config.Sandbox.CPUs = 0 }},
+		{name: "sandbox PIDs", mutate: func(config *Config) { config.Sandbox.PIDsLimit = 0 }},
+		{name: "sandbox memory", mutate: func(config *Config) { config.Sandbox.Memory = "" }},
+		{name: "host execution driver", mutate: func(config *Config) {
+			config.Sandbox.Driver, config.Sandbox.Image, config.Sandbox.AllowHostExecution = "docker", "gofer:test", true
+		}},
 		{name: "model field", mutate: func(config *Config) { config.Models = []ModelConfig{{Name: "x"}} }},
 		{name: "model duplicate", mutate: func(config *Config) {
 			config.Models = []ModelConfig{{Name: "x", Provider: "p", Model: "m"}, {Name: "x", Provider: "p", Model: "m"}}
