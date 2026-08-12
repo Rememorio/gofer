@@ -49,6 +49,7 @@ import (
 	"github.com/Rememorio/gofer/internal/tool/builtin"
 	"github.com/Rememorio/gofer/internal/toolhistory"
 	"github.com/Rememorio/gofer/internal/tooloutput"
+	"github.com/Rememorio/gofer/internal/webresearch"
 	"github.com/Rememorio/gofer/internal/workspace"
 	"github.com/Rememorio/gofer/internal/workspacechange"
 )
@@ -65,6 +66,7 @@ type Service struct {
 	controls   *control.Service
 	feedback   feedback.Store
 	browser    *browser.Manager
+	research   *webresearch.Client
 	mcp        *mcp.Client
 	skills     *skill.Catalog
 	skillMount string
@@ -141,6 +143,9 @@ func (service *Service) open() error {
 		return err
 	}
 	if err = service.openBrowser(); err != nil {
+		return err
+	}
+	if err = service.openWebResearch(); err != nil {
 		return err
 	}
 	if err = service.openAgentExtensions(); err != nil {
@@ -287,6 +292,32 @@ func (service *Service) openBrowser() error {
 		IdleTimeout: time.Duration(service.config.Browser.IdleTimeoutSeconds) * time.Second,
 		Factory:     factory,
 	})
+	return err
+}
+
+func (service *Service) openWebResearch() error {
+	web := service.config.Web
+	if !web.Search.Enabled && !web.Fetch.Enabled {
+		return nil
+	}
+	settings := webresearch.Config{}
+	if web.Search.Enabled {
+		settings.Search = &webresearch.SearchConfig{
+			Provider: web.Search.Provider, APIKey: web.Search.APIKey, Endpoint: web.Search.Endpoint,
+			MaxResults: web.Search.MaxResults, SafeSearch: web.Search.SafeSearch,
+			Timeout:               time.Duration(web.Search.TimeoutSeconds) * time.Second,
+			AllowPrivateAddresses: web.Search.AllowPrivateAddresses,
+		}
+	}
+	if web.Fetch.Enabled {
+		settings.Fetch = &webresearch.FetchConfig{
+			MaxResponseBytes: web.Fetch.MaxResponseBytes, MaxContentCharacters: web.Fetch.MaxContentChars,
+			MaxRedirects: web.Fetch.MaxRedirects, Timeout: time.Duration(web.Fetch.TimeoutSeconds) * time.Second,
+			UserAgent: web.Fetch.UserAgent, AllowPrivateAddresses: web.Fetch.AllowPrivateAddresses,
+		}
+	}
+	var err error
+	service.research, err = webresearch.New(settings)
 	return err
 }
 
@@ -555,6 +586,11 @@ func (service *Service) registerCoreTools(registry *tool.Registry, threadWorkspa
 			return err
 		}
 	}
+	if service.research != nil {
+		if err = (webresearch.Tools{Client: service.research}).Register(registry); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -579,6 +615,9 @@ func (service *Service) runtimeMiddleware(threadID domain.ThreadID, provider con
 	descriptors := mergeDescriptors(builtin.PolicyDescriptors(), control.PolicyDescriptors(), sandbox.PolicyDescriptors())
 	if service.browser != nil {
 		descriptors = mergeDescriptors(descriptors, browser.PolicyDescriptors())
+	}
+	if service.research != nil {
+		descriptors = mergeDescriptors(descriptors, webresearch.PolicyDescriptors())
 	}
 	if service.memories != nil {
 		descriptors = mergeDescriptors(descriptors, memory.PolicyDescriptors())
@@ -837,6 +876,9 @@ func (service *Service) Close() error {
 		service.wait.Wait()
 		if service.browser != nil {
 			service.err = errors.Join(service.err, service.browser.Close())
+		}
+		if service.research != nil {
+			service.research.Close()
 		}
 		if service.mcp != nil {
 			service.err = errors.Join(service.err, service.mcp.Close())

@@ -81,6 +81,16 @@ models:
 	}
 }
 
+func TestWebDefaults(t *testing.T) {
+	t.Parallel()
+
+	web := Defaults().Web
+	if web.Search.Enabled || web.Search.Provider != "brave" || web.Search.MaxResults != 5 ||
+		web.Fetch.Enabled || web.Fetch.MaxResponseBytes != 2<<20 {
+		t.Fatalf("Defaults().Web = %#v", web)
+	}
+}
+
 func TestLoadCanDisableRuntimeGuards(t *testing.T) {
 	t.Parallel()
 	config, err := Load(strings.NewReader("config_version: 1\nloop_detection:\n  enabled: false\nread_before_write:\n  enabled: false\nstorage:\n  driver: memory\n"))
@@ -185,6 +195,28 @@ func TestValidateRejectsInvalidConfigurations(t *testing.T) {
 		{name: "browser viewport height high", mutate: func(config *Config) { config.Browser.ViewportHeight = 4321 }},
 		{name: "browser executable NUL", mutate: func(config *Config) { config.Browser.ExecutablePath = "chrome\x00" }},
 		{name: "browser remote NUL", mutate: func(config *Config) { config.Browser.RemoteURL = "ws://chrome\x00" }},
+		{name: "web search provider", mutate: func(config *Config) { config.Web.Search.Provider = "other" }},
+		{name: "web search results low", mutate: func(config *Config) { config.Web.Search.MaxResults = 0 }},
+		{name: "web search results high", mutate: func(config *Config) { config.Web.Search.MaxResults = 21 }},
+		{name: "web search timeout", mutate: func(config *Config) { config.Web.Search.TimeoutSeconds = 0 }},
+		{name: "web search safe mode", mutate: func(config *Config) { config.Web.Search.SafeSearch = "maybe" }},
+		{name: "web search key whitespace", mutate: func(config *Config) { config.Web.Search.APIKey = " key" }},
+		{name: "web search bad endpoint", mutate: func(config *Config) { config.Web.Search.Endpoint = "file:///tmp/index" }},
+		{name: "web search endpoint credentials", mutate: func(config *Config) { config.Web.Search.Endpoint = "https://user@example.com" }},
+		{name: "web Brave key", mutate: func(config *Config) { config.Web.Search.Enabled = true }},
+		{name: "web SearXNG endpoint", mutate: func(config *Config) {
+			config.Web.Search.Enabled, config.Web.Search.Provider = true, "searxng"
+		}},
+		{name: "web fetch response low", mutate: func(config *Config) { config.Web.Fetch.MaxResponseBytes = 1023 }},
+		{name: "web fetch response high", mutate: func(config *Config) { config.Web.Fetch.MaxResponseBytes = 101 << 20 }},
+		{name: "web fetch content low", mutate: func(config *Config) { config.Web.Fetch.MaxContentChars = 127 }},
+		{name: "web fetch content high", mutate: func(config *Config) { config.Web.Fetch.MaxContentChars = 2_000_001 }},
+		{name: "web fetch timeout", mutate: func(config *Config) { config.Web.Fetch.TimeoutSeconds = 0 }},
+		{name: "web fetch redirects low", mutate: func(config *Config) { config.Web.Fetch.MaxRedirects = -1 }},
+		{name: "web fetch redirects high", mutate: func(config *Config) { config.Web.Fetch.MaxRedirects = 21 }},
+		{name: "web fetch user agent blank", mutate: func(config *Config) { config.Web.Fetch.UserAgent = "" }},
+		{name: "web fetch user agent whitespace", mutate: func(config *Config) { config.Web.Fetch.UserAgent = " Gofer" }},
+		{name: "web fetch user agent newline", mutate: func(config *Config) { config.Web.Fetch.UserAgent = "Gofer\nBad" }},
 		{name: "skill size", mutate: func(config *Config) { config.Skills.MaxPackageBytes = 0 }},
 		{name: "skill enabled root", mutate: func(config *Config) { config.Skills.Enabled, config.Skills.Root = true, "" }},
 		{name: "MCP missing servers", mutate: func(config *Config) { config.MCP.Enabled = true }},

@@ -25,6 +25,11 @@ func TestChromeConfigAndFactory(t *testing.T) {
 	if err != nil || factory == nil {
 		t.Fatalf("NewChromeFactory() = %v, %v", factory, err)
 	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := factory(cancelled, "cancelled"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("factory(cancelled) error = %v", err)
+	}
 	config := ChromeConfig{}
 	if err := applyChromeDefaults(&config); err != nil {
 		t.Fatalf("applyChromeDefaults(): %v", err)

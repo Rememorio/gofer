@@ -23,6 +23,10 @@ fail-closed local driver or hardened ephemeral Docker containers. Stateful,
 thread-scoped browser automation is available through Chrome DevTools Protocol
 with bounded sessions, stable snapshot references, screenshot artifacts, and
 request-level SSRF policy enforcement.
+Opt-in web research adds normalized Brave or SearXNG search plus bounded HTML,
+text, and JSON retrieval. Its guarded transport validates every DNS answer and
+redirect, dials approved addresses directly, and marks all remote content as
+untrusted before model use.
 Long-running task control now includes optimistic goal and todo state,
 hierarchically scoped memory recall, safe conversation compaction, and bounded
 parallel child agents with ordered lifecycle events. Goal and todo snapshots
@@ -147,6 +151,8 @@ Provider content-filter handling is documented in
 [Safety finish reasons](docs/safety-finish.md).
 Provider configuration and normalized protocol behavior are documented in
 [Model providers](docs/model-providers.md).
+Search, direct document retrieval, and outbound network policy are documented
+in [Web research](docs/web-research.md).
 
 ## Development
 

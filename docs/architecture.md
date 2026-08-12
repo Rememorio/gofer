@@ -60,6 +60,8 @@ Planned package groups:
 | `internal/artifact` | Explicit user-facing output registration and streaming |
 | `internal/sandbox` | Local and isolated execution contracts |
 | `internal/browser` | Thread-scoped CDP sessions, snapshots, network guards, and browser tools |
+| `internal/netguard` | Shared DNS-aware URL validation and rebinding-resistant dialing |
+| `internal/webresearch` | Provider-neutral search, bounded document extraction, and agent tools |
 | `internal/skill` | Skill discovery, validation, activation, and projection |
 | `internal/subagent` | Bounded parallel delegation and event fan-in |
 | `internal/memory` | Scoped retrieval, consolidation, and lifecycle |

@@ -89,6 +89,8 @@ func publicModel(model config.ModelConfig) modelResource {
 func (service *Service) listFeatures(writer http.ResponseWriter, _ *http.Request) {
 	writeResourceJSON(writer, http.StatusOK, map[string]any{
 		"browser_control":      map[string]bool{"enabled": service.browser != nil},
+		"web_search":           map[string]bool{"enabled": service.research != nil && service.research.HasSearch()},
+		"web_fetch":            map[string]bool{"enabled": service.research != nil && service.research.HasFetch()},
 		"skills":               map[string]bool{"enabled": service.skills != nil},
 		"memory":               map[string]bool{"enabled": service.memories != nil},
 		"scheduler":            map[string]bool{"enabled": service.config.Scheduler.Enabled},

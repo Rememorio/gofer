@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -35,6 +36,7 @@ type Config struct {
 	Workspace       WorkspaceConfig       `yaml:"workspace" json:"workspace"`
 	Sandbox         SandboxConfig         `yaml:"sandbox" json:"sandbox"`
 	Browser         BrowserConfig         `yaml:"browser" json:"browser"`
+	Web             WebConfig             `yaml:"web" json:"web"`
 	Skills          SkillsConfig          `yaml:"skills" json:"skills"`
 	MCP             MCPConfig             `yaml:"mcp" json:"mcp"`
 	Memory          MemoryConfig          `yaml:"memory" json:"memory"`
@@ -141,6 +143,35 @@ type BrowserConfig struct {
 	ActionTimeoutSeconds  int    `yaml:"action_timeout_seconds" json:"action_timeout_seconds"`
 	ViewportWidth         int    `yaml:"viewport_width" json:"viewport_width"`
 	ViewportHeight        int    `yaml:"viewport_height" json:"viewport_height"`
+}
+
+// WebConfig controls optional bounded web research tools.
+type WebConfig struct {
+	Search WebSearchConfig `yaml:"search" json:"search"`
+	Fetch  WebFetchConfig  `yaml:"fetch" json:"fetch"`
+}
+
+// WebSearchConfig selects a normalized web-search provider.
+type WebSearchConfig struct {
+	Enabled               bool   `yaml:"enabled" json:"enabled"`
+	Provider              string `yaml:"provider" json:"provider"`
+	APIKey                string `yaml:"api_key" json:"-"`
+	Endpoint              string `yaml:"endpoint" json:"endpoint,omitempty"`
+	MaxResults            int    `yaml:"max_results" json:"max_results"`
+	TimeoutSeconds        int    `yaml:"timeout_seconds" json:"timeout_seconds"`
+	SafeSearch            string `yaml:"safe_search" json:"safe_search"`
+	AllowPrivateAddresses bool   `yaml:"allow_private_addresses" json:"allow_private_addresses"`
+}
+
+// WebFetchConfig controls direct text document retrieval.
+type WebFetchConfig struct {
+	Enabled               bool   `yaml:"enabled" json:"enabled"`
+	MaxResponseBytes      int64  `yaml:"max_response_bytes" json:"max_response_bytes"`
+	MaxContentChars       int    `yaml:"max_content_chars" json:"max_content_chars"`
+	TimeoutSeconds        int    `yaml:"timeout_seconds" json:"timeout_seconds"`
+	MaxRedirects          int    `yaml:"max_redirects" json:"max_redirects"`
+	UserAgent             string `yaml:"user_agent" json:"user_agent"`
+	AllowPrivateAddresses bool   `yaml:"allow_private_addresses" json:"allow_private_addresses"`
 }
 
 // SkillsConfig controls local progressive-disclosure skill packages.
@@ -278,6 +309,13 @@ func Defaults() Config {
 			MaxSessions: 32, IdleTimeoutSeconds: 1800, ActionTimeoutSeconds: 30,
 			ViewportWidth: 1280, ViewportHeight: 720,
 		},
+		Web: WebConfig{
+			Search: WebSearchConfig{Provider: "brave", MaxResults: 5, TimeoutSeconds: 15, SafeSearch: "moderate"},
+			Fetch: WebFetchConfig{
+				MaxResponseBytes: 2 << 20, MaxContentChars: 20_000, TimeoutSeconds: 20,
+				MaxRedirects: 5, UserAgent: "Gofer/1.0 (+https://github.com/Rememorio/gofer)",
+			},
+		},
 		Skills:    SkillsConfig{Root: "skills", ProjectionRoot: ".gofer/skills", MaxDocumentBytes: 1 << 20, MaxPackageBytes: 10 << 20},
 		MCP:       MCPConfig{},
 		Memory:    MemoryConfig{Enabled: true, Limit: 5, MaxChars: 8 << 10},
@@ -356,6 +394,9 @@ func (config Config) Validate() error {
 		return fmt.Errorf("%w: read_file must be exempt from tool output budgeting when read_before_write is enabled", ErrInvalid)
 	}
 	if err := validateBrowser(config.Browser); err != nil {
+		return err
+	}
+	if err := validateWeb(config.Web); err != nil {
 		return err
 	}
 	if err := validateAgentExtensions(config.Skills, config.MCP, config.Memory); err != nil {
@@ -542,6 +583,54 @@ func validateBrowser(browser BrowserConfig) error {
 	}
 	if strings.IndexByte(browser.ExecutablePath, 0) >= 0 || strings.IndexByte(browser.RemoteURL, 0) >= 0 {
 		return fmt.Errorf("%w: browser endpoint contains NUL", ErrInvalid)
+	}
+	return nil
+}
+
+func validateWeb(web WebConfig) error {
+	if err := validateWebSearch(web.Search); err != nil {
+		return err
+	}
+	return validateWebFetch(web.Fetch)
+}
+
+func validateWebSearch(search WebSearchConfig) error {
+	if !oneOf(search.Provider, "brave", "searxng") || search.MaxResults < 1 || search.MaxResults > 20 ||
+		search.TimeoutSeconds < 1 || search.TimeoutSeconds > 120 || !oneOf(search.SafeSearch, "off", "moderate", "strict") {
+		return fmt.Errorf("%w: invalid web search provider or limits", ErrInvalid)
+	}
+	if search.APIKey != strings.TrimSpace(search.APIKey) {
+		return fmt.Errorf("%w: web search API key has surrounding whitespace", ErrInvalid)
+	}
+	if search.Endpoint != "" {
+		if err := validateHTTPURL(search.Endpoint); err != nil {
+			return fmt.Errorf("%w: web search endpoint: %w", ErrInvalid, err)
+		}
+	}
+	if search.Enabled && search.Provider == "brave" && search.APIKey == "" {
+		return fmt.Errorf("%w: Brave API key is required when web search is enabled", ErrInvalid)
+	}
+	if search.Enabled && search.Provider == "searxng" && search.Endpoint == "" {
+		return fmt.Errorf("%w: SearXNG endpoint is required when web search is enabled", ErrInvalid)
+	}
+	return nil
+}
+
+func validateWebFetch(fetch WebFetchConfig) error {
+	if fetch.MaxResponseBytes < 1024 || fetch.MaxResponseBytes > 100<<20 ||
+		fetch.MaxContentChars < 128 || fetch.MaxContentChars > 2_000_000 ||
+		fetch.TimeoutSeconds < 1 || fetch.TimeoutSeconds > 120 || fetch.MaxRedirects < 0 || fetch.MaxRedirects > 20 ||
+		strings.TrimSpace(fetch.UserAgent) != fetch.UserAgent || fetch.UserAgent == "" || strings.ContainsAny(fetch.UserAgent, "\r\n") {
+		return fmt.Errorf("%w: invalid web fetch limits or user agent", ErrInvalid)
+	}
+	return nil
+}
+
+func validateHTTPURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Host == "" || parsed.User != nil ||
+		(parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return errors.New("absolute HTTP(S) URL without credentials is required")
 	}
 	return nil
 }

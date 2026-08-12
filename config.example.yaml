@@ -75,6 +75,27 @@ browser:
   viewport_width: 1280
   viewport_height: 720
 
+# Bounded web research is opt-in. Brave requires an API key; SearXNG requires
+# an endpoint such as https://search.example.com. Fetch accepts textual HTTP(S)
+# documents only and blocks private/reserved destinations by default.
+web:
+  search:
+    enabled: false
+    provider: brave
+    # api_key: $BRAVE_SEARCH_API_KEY
+    max_results: 5
+    timeout_seconds: 15
+    safe_search: moderate
+    allow_private_addresses: false
+  fetch:
+    enabled: false
+    max_response_bytes: 2097152
+    max_content_chars: 20000
+    timeout_seconds: 20
+    max_redirects: 5
+    user_agent: Gofer/1.0 (+https://github.com/Rememorio/gofer)
+    allow_private_addresses: false
+
 skills:
   enabled: false
   root: skills
