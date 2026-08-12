@@ -29,6 +29,39 @@ import (
 
 const appWebhookSecret = "app-webhook-secret-at-least-24-bytes"
 
+type appChannelDispatcherFunc func(context.Context, channel.Request) (channel.Reply, error)
+
+func (function appChannelDispatcherFunc) Dispatch(ctx context.Context, request channel.Request) (channel.Reply, error) {
+	return function(ctx, request)
+}
+
+func TestOpenNativeChannelsRegistersConfiguredProviders(t *testing.T) {
+	t.Parallel()
+	cfg := config.Defaults()
+	cfg.Channels.Enabled = true
+	cfg.Channels.Slack = config.ChannelSlackConfig{Enabled: true, BotToken: "bot", AppToken: "app", RequestTimeoutSeconds: 20, MaxAttempts: 3}
+	cfg.Channels.Telegram = config.ChannelTelegramConfig{Enabled: true, BotToken: "bot", PollTimeoutSeconds: 30, RequestTimeoutSeconds: 45, MaxAttempts: 3}
+	cfg.Channels.Discord = config.ChannelDiscordConfig{Enabled: true, BotToken: "bot", RequestTimeoutSeconds: 20, MaxAttempts: 3}
+	state := channel.NewMemoryState()
+	manager, err := channel.NewManager(channel.Config{
+		Resolver: state, Dispatcher: appChannelDispatcherFunc(func(context.Context, channel.Request) (channel.Reply, error) { return channel.Reply{}, nil }),
+		Dedupe: state, MaxInflight: 1, DedupeTTL: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{config: cfg}
+	if err = service.openNativeChannels(manager); err != nil {
+		t.Fatal(err)
+	}
+	if providers := manager.Providers(); fmt.Sprint(providers) != "[discord slack telegram]" {
+		t.Fatalf("providers = %v", providers)
+	}
+	if err = manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestChannelWebhookPersistsConversationAcrossServiceRestart(t *testing.T) {
 	var calls atomic.Int32
 	var requestMu sync.Mutex

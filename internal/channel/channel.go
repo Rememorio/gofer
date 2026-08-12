@@ -82,6 +82,17 @@ type Sender interface {
 	Close() error
 }
 
+// SubmitFunc accepts one normalized provider event without blocking on the
+// agent turn. Providers should retain and retry events when it returns ErrBusy.
+type SubmitFunc func(context.Context, Message) error
+
+// Source is implemented by providers that own an inbound polling or socket
+// connection. Start must return after the connection is ready and keep any
+// background work bounded by the supplied context.
+type Source interface {
+	Start(context.Context, SubmitFunc) error
+}
+
 // Dedupe owns atomic inbound idempotency claims.
 type Dedupe interface {
 	Begin(context.Context, string, time.Time, time.Duration) (bool, error)
@@ -220,6 +231,9 @@ func (manager *Manager) Register(sender Sender) error {
 	if manager.closed || manager.closing {
 		return ErrClosed
 	}
+	if manager.started {
+		return ErrInvalid
+	}
 	if _, exists := manager.senders[name]; exists {
 		return ErrInvalid
 	}
@@ -304,18 +318,32 @@ func (manager *Manager) Start(parent context.Context) error {
 		return ErrInvalid
 	}
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
 	if manager.closed || manager.closing {
+		manager.mu.Unlock()
 		return ErrClosed
 	}
 	if manager.started {
+		manager.mu.Unlock()
 		return nil
 	}
 	manager.workerCtx, manager.cancel = context.WithCancel(parent)
 	manager.started = true
+	sources := make([]Source, 0, len(manager.senders))
+	for _, sender := range manager.senders {
+		if source, ok := sender.(Source); ok {
+			sources = append(sources, source)
+		}
+	}
 	for range manager.workers {
 		manager.wait.Add(1)
 		go manager.worker()
+	}
+	workerCtx := manager.workerCtx
+	manager.mu.Unlock()
+	for _, source := range sources {
+		if err := source.Start(workerCtx, manager.Submit); err != nil {
+			return errors.Join(err, manager.Close())
+		}
 	}
 	return nil
 }
@@ -401,23 +429,21 @@ func (manager *Manager) Close() error {
 	}
 	manager.closing = true
 	cancel := manager.cancel
-	manager.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-	manager.wait.Wait()
-	manager.mu.Lock()
-	manager.closed = true
 	senders := make([]Sender, 0, len(manager.senders))
 	for _, sender := range manager.senders {
 		senders = append(senders, sender)
 	}
 	manager.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	var failures []error
 	for _, sender := range senders {
 		failures = append(failures, sender.Close())
 	}
+	manager.wait.Wait()
 	manager.mu.Lock()
+	manager.closed = true
 	manager.closeErr = errors.Join(failures...)
 	close(manager.done)
 	err := manager.closeErr

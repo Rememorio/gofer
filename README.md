@@ -145,7 +145,8 @@ The long-running task primitives are documented in
 HTTP contracts and persistence behavior are documented in
 [Gateway and persistence](docs/gateway.md).
 Messaging identity, webhook, and callback contracts are documented in
-[Channels](docs/channels.md).
+[Channels](docs/channels.md), including signed webhooks and native Slack,
+Telegram, and Discord connections.
 Operational boundaries are documented in [Service control plane](docs/control-plane.md).
 Tool result externalization and fallback behavior are documented in
 [Tool output budgets](docs/tool-output.md).

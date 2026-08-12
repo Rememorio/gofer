@@ -260,6 +260,9 @@ type ChannelsConfig struct {
 	UnauthorizedReply string                 `yaml:"unauthorized_reply" json:"unauthorized_reply"`
 	Bindings          []ChannelBindingConfig `yaml:"bindings" json:"bindings"`
 	Webhook           ChannelWebhookConfig   `yaml:"webhook" json:"webhook"`
+	Slack             ChannelSlackConfig     `yaml:"slack" json:"slack"`
+	Telegram          ChannelTelegramConfig  `yaml:"telegram" json:"telegram"`
+	Discord           ChannelDiscordConfig   `yaml:"discord" json:"discord"`
 }
 
 // ChannelBindingConfig bootstraps one operator-approved external identity.
@@ -282,6 +285,39 @@ type ChannelWebhookConfig struct {
 	MaxBodyBytes          int64  `yaml:"max_body_bytes" json:"max_body_bytes"`
 	ClockSkewSeconds      int    `yaml:"clock_skew_seconds" json:"clock_skew_seconds"`
 	AllowPrivateAddresses bool   `yaml:"allow_private_addresses" json:"allow_private_addresses"`
+}
+
+// ChannelSlackConfig controls the Slack Socket Mode provider.
+type ChannelSlackConfig struct {
+	Enabled               bool     `yaml:"enabled" json:"enabled"`
+	BotToken              string   `yaml:"bot_token" json:"-"`
+	AppToken              string   `yaml:"app_token" json:"-"`
+	BotUserID             string   `yaml:"bot_user_id" json:"bot_user_id,omitempty"`
+	AllowedUsers          []string `yaml:"allowed_users" json:"allowed_users"`
+	RequestTimeoutSeconds int      `yaml:"request_timeout_seconds" json:"request_timeout_seconds"`
+	MaxAttempts           int      `yaml:"max_attempts" json:"max_attempts"`
+}
+
+// ChannelTelegramConfig controls the Telegram Bot API provider.
+type ChannelTelegramConfig struct {
+	Enabled               bool     `yaml:"enabled" json:"enabled"`
+	BotToken              string   `yaml:"bot_token" json:"-"`
+	AllowedUsers          []string `yaml:"allowed_users" json:"allowed_users"`
+	PollTimeoutSeconds    int      `yaml:"poll_timeout_seconds" json:"poll_timeout_seconds"`
+	RequestTimeoutSeconds int      `yaml:"request_timeout_seconds" json:"request_timeout_seconds"`
+	MaxAttempts           int      `yaml:"max_attempts" json:"max_attempts"`
+}
+
+// ChannelDiscordConfig controls the Discord Gateway provider.
+type ChannelDiscordConfig struct {
+	Enabled               bool     `yaml:"enabled" json:"enabled"`
+	BotToken              string   `yaml:"bot_token" json:"-"`
+	AllowedGuilds         []string `yaml:"allowed_guilds" json:"allowed_guilds"`
+	AllowedChannels       []string `yaml:"allowed_channels" json:"allowed_channels"`
+	MentionOnly           bool     `yaml:"mention_only" json:"mention_only"`
+	ThreadMode            bool     `yaml:"thread_mode" json:"thread_mode"`
+	RequestTimeoutSeconds int      `yaml:"request_timeout_seconds" json:"request_timeout_seconds"`
+	MaxAttempts           int      `yaml:"max_attempts" json:"max_attempts"`
 }
 
 // TitleConfig controls automatic first-exchange conversation titles.
@@ -396,6 +432,9 @@ func Defaults() Config {
 			MaxInflight: 32, QueueCapacity: 128, DedupeTTLSeconds: 86400,
 			UnauthorizedReply: "This channel identity is not connected to Gofer.",
 			Webhook:           ChannelWebhookConfig{TimeoutSeconds: 10, MaxAttempts: 3, MaxBodyBytes: 1 << 20, ClockSkewSeconds: 300},
+			Slack:             ChannelSlackConfig{RequestTimeoutSeconds: 20, MaxAttempts: 3},
+			Telegram:          ChannelTelegramConfig{PollTimeoutSeconds: 30, RequestTimeoutSeconds: 45, MaxAttempts: 3},
+			Discord:           ChannelDiscordConfig{RequestTimeoutSeconds: 20, MaxAttempts: 3},
 		},
 		Title: TitleConfig{Enabled: true, MaxWords: 6, MaxChars: 60},
 		Suggestions: SuggestionsConfig{
@@ -619,7 +658,69 @@ func validateChannels(channels ChannelsConfig) error {
 	if err := validateChannelWebhook(channels.Enabled, channels.Webhook); err != nil {
 		return err
 	}
+	if err := validateNativeChannels(channels); err != nil {
+		return err
+	}
 	return validateChannelBindings(channels.Bindings)
+}
+
+func validateNativeChannels(channels ChannelsConfig) error {
+	if err := validateSlackChannel(channels.Enabled, channels.Slack); err != nil {
+		return err
+	}
+	if err := validateTelegramChannel(channels.Enabled, channels.Telegram); err != nil {
+		return err
+	}
+	return validateDiscordChannel(channels.Enabled, channels.Discord)
+}
+
+func validateSlackChannel(channelsEnabled bool, channel ChannelSlackConfig) error {
+	if !channel.Enabled {
+		return nil
+	}
+	if !channelsEnabled || strings.TrimSpace(channel.BotToken) == "" || strings.TrimSpace(channel.AppToken) == "" ||
+		channel.RequestTimeoutSeconds < 1 || channel.RequestTimeoutSeconds > 120 || channel.MaxAttempts < 1 || channel.MaxAttempts > 5 ||
+		!validChannelIDs(channel.AllowedUsers) || len(channel.BotUserID) > 256 {
+		return fmt.Errorf("%w: invalid Slack channel configuration", ErrInvalid)
+	}
+	return nil
+}
+
+func validateTelegramChannel(channelsEnabled bool, channel ChannelTelegramConfig) error {
+	if !channel.Enabled {
+		return nil
+	}
+	if !channelsEnabled || strings.TrimSpace(channel.BotToken) == "" || channel.PollTimeoutSeconds < 1 || channel.PollTimeoutSeconds > 50 ||
+		channel.RequestTimeoutSeconds <= channel.PollTimeoutSeconds || channel.RequestTimeoutSeconds > 120 ||
+		channel.MaxAttempts < 1 || channel.MaxAttempts > 5 || !validChannelIDs(channel.AllowedUsers) {
+		return fmt.Errorf("%w: invalid Telegram channel configuration", ErrInvalid)
+	}
+	return nil
+}
+
+func validateDiscordChannel(channelsEnabled bool, channel ChannelDiscordConfig) error {
+	if !channel.Enabled {
+		return nil
+	}
+	if !channelsEnabled || strings.TrimSpace(channel.BotToken) == "" || channel.RequestTimeoutSeconds < 1 || channel.RequestTimeoutSeconds > 120 ||
+		channel.MaxAttempts < 1 || channel.MaxAttempts > 5 || !validChannelIDs(channel.AllowedGuilds) || !validChannelIDs(channel.AllowedChannels) {
+		return fmt.Errorf("%w: invalid Discord channel configuration", ErrInvalid)
+	}
+	return nil
+}
+
+func validChannelIDs(values []string) bool {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if strings.TrimSpace(value) != value || value == "" || len(value) > 256 {
+			return false
+		}
+		if _, exists := seen[value]; exists {
+			return false
+		}
+		seen[value] = struct{}{}
+	}
+	return true
 }
 
 func validateChannelWebhook(channelsEnabled bool, webhook ChannelWebhookConfig) error {

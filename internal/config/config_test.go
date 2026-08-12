@@ -304,6 +304,31 @@ func TestValidateRejectsInvalidConfigurations(t *testing.T) {
 			config.Channels.Enabled = true
 			config.Channels.Webhook = ChannelWebhookConfig{Enabled: true, Secret: "012345678901234567890123", OutboundURL: "file:///tmp/reply", TimeoutSeconds: 10, MaxAttempts: 1, MaxBodyBytes: 1024, ClockSkewSeconds: 60}
 		}},
+		{name: "channel slack without channels", mutate: func(config *Config) { config.Channels.Slack.Enabled = true }},
+		{name: "channel slack credentials", mutate: func(config *Config) {
+			config.Channels.Enabled = true
+			config.Channels.Slack.Enabled, config.Channels.Slack.BotToken = true, "bot"
+		}},
+		{name: "channel slack users", mutate: func(config *Config) {
+			config.Channels.Enabled = true
+			config.Channels.Slack = ChannelSlackConfig{Enabled: true, BotToken: "bot", AppToken: "app", AllowedUsers: []string{"same", "same"}, RequestTimeoutSeconds: 10, MaxAttempts: 1}
+		}},
+		{name: "channel telegram timeout", mutate: func(config *Config) {
+			config.Channels.Enabled = true
+			config.Channels.Telegram = ChannelTelegramConfig{Enabled: true, BotToken: "bot", PollTimeoutSeconds: 30, RequestTimeoutSeconds: 30, MaxAttempts: 1}
+		}},
+		{name: "channel telegram users", mutate: func(config *Config) {
+			config.Channels.Enabled = true
+			config.Channels.Telegram = ChannelTelegramConfig{Enabled: true, BotToken: "bot", AllowedUsers: []string{" bad"}, PollTimeoutSeconds: 30, RequestTimeoutSeconds: 45, MaxAttempts: 1}
+		}},
+		{name: "channel discord attempts", mutate: func(config *Config) {
+			config.Channels.Enabled = true
+			config.Channels.Discord = ChannelDiscordConfig{Enabled: true, BotToken: "bot", RequestTimeoutSeconds: 10, MaxAttempts: 6}
+		}},
+		{name: "channel discord guilds", mutate: func(config *Config) {
+			config.Channels.Enabled = true
+			config.Channels.Discord = ChannelDiscordConfig{Enabled: true, BotToken: "bot", AllowedGuilds: []string{""}, RequestTimeoutSeconds: 10, MaxAttempts: 1}
+		}},
 		{name: "channel binding provider", mutate: func(config *Config) {
 			config.Channels.Bindings = []ChannelBindingConfig{{UserID: "u", Provider: "Webhook", ExternalUserID: "external"}}
 		}},
@@ -351,6 +376,21 @@ func TestValidateRejectsInvalidConfigurations(t *testing.T) {
 				t.Fatalf("Validate() error = %v, want ErrInvalid", err)
 			}
 		})
+	}
+}
+
+func TestNativeChannelConfigurationsValidate(t *testing.T) {
+	t.Parallel()
+	config := Defaults()
+	config.Channels.Enabled = true
+	config.Channels.Slack = ChannelSlackConfig{Enabled: true, BotToken: "bot", AppToken: "app", AllowedUsers: []string{"U1"}, RequestTimeoutSeconds: 20, MaxAttempts: 3}
+	config.Channels.Telegram = ChannelTelegramConfig{Enabled: true, BotToken: "bot", AllowedUsers: []string{"1"}, PollTimeoutSeconds: 30, RequestTimeoutSeconds: 45, MaxAttempts: 3}
+	config.Channels.Discord = ChannelDiscordConfig{Enabled: true, BotToken: "bot", AllowedGuilds: []string{"G1"}, AllowedChannels: []string{"C1"}, RequestTimeoutSeconds: 20, MaxAttempts: 3}
+	if err := config.Validate(); err != nil {
+		t.Fatalf("Validate = %v", err)
+	}
+	if !validChannelIDs(nil) || validChannelIDs([]string{"x", "x"}) || validChannelIDs([]string{strings.Repeat("x", 257)}) {
+		t.Fatal("validChannelIDs boundary is incorrect")
 	}
 }
 

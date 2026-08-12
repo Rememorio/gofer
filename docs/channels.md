@@ -32,6 +32,81 @@ The manager also provides two separate concurrency controls:
 - a keyed lock serializes turns for one conversation while unrelated chats can
   run concurrently.
 
+## Native providers
+
+Gofer includes direct Slack, Telegram, and Discord adapters. They implement the
+same `Sender` and inbound-source contracts as the generic webhook, so the
+manager owns startup, shutdown, queueing, authentication, deduplication, and
+conversation serialization uniformly. A provider is fully connected before
+startup succeeds. Connections retry with capped exponential backoff and stop
+with the service context.
+
+Slack uses Socket Mode and therefore needs no public callback URL. Configure a
+bot token and an app-level token with `connections:write`; the app must also
+subscribe to the desired message and mention events. Socket envelopes are
+acknowledged only after their normalized event enters Gofer's queue. Replies
+preserve Slack threads, escape reserved mrkdwn characters, and honor Slack's
+message length limit.
+
+```yaml
+channels:
+  enabled: true
+  slack:
+    enabled: true
+    bot_token: ${SLACK_BOT_TOKEN}
+    app_token: ${SLACK_APP_TOKEN}
+    allowed_users: [U0123456789]
+    request_timeout_seconds: 20
+    max_attempts: 3
+```
+
+Telegram uses Bot API long polling. Private chats map all messages to one Gofer
+thread; group chats use the Telegram topic, replied-to message, or root message
+as their topic. The polling offset advances only after queue acceptance, so
+backpressure does not silently discard an update. Text is split by Telegram's
+UTF-16 length rule, and the first chunk replies to the inbound message.
+
+```yaml
+channels:
+  enabled: true
+  telegram:
+    enabled: true
+    bot_token: ${TELEGRAM_BOT_TOKEN}
+    allowed_users: ["123456789"]
+    poll_timeout_seconds: 30
+    request_timeout_seconds: 45
+    max_attempts: 3
+```
+
+Discord uses Gateway v10 with heartbeats, session resume, and the Message
+Content intent. `mention_only` filters ordinary guild messages unless their
+channel appears in `allowed_channels`; direct messages and established Discord
+threads remain routable. With `thread_mode`, a message starts a Discord thread
+when the API permits it and Gofer replies there. Outbound mentions are disabled
+to prevent model-generated mass pings.
+
+```yaml
+channels:
+  enabled: true
+  discord:
+    enabled: true
+    bot_token: ${DISCORD_BOT_TOKEN}
+    allowed_guilds: ["123456789012345678"]
+    allowed_channels: []
+    mention_only: true
+    thread_mode: true
+    request_timeout_seconds: 20
+    max_attempts: 3
+```
+
+`allowed_users` and `allowed_guilds` are transport-level allowlists; an empty
+list allows the provider event to reach Gofer's binding resolver. An active
+binding is still required for the external user, so an allowlist never grants
+access to another Gofer account. Provider attachment references are normalized
+as untrusted manifests. This release does not download them or upload reply
+files; content crosses the workspace boundary only through Gofer's existing
+upload and document-ingestion APIs.
+
 ## Signed generic webhook
 
 The built-in `webhook` adapter is a complete transport and a reference contract

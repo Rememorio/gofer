@@ -159,6 +159,34 @@ channels:
     max_body_bytes: 1048576
     clock_skew_seconds: 300
     allow_private_addresses: false
+  # Slack Socket Mode needs both a bot token (xoxb-...) and an app token
+  # (xapp-...) with connections:write.
+  slack:
+    enabled: false
+    bot_token: ""
+    app_token: ""
+    bot_user_id: ""
+    allowed_users: []
+    request_timeout_seconds: 20
+    max_attempts: 3
+  # Telegram uses long polling, so no public callback URL is required.
+  telegram:
+    enabled: false
+    bot_token: ""
+    allowed_users: []
+    poll_timeout_seconds: 30
+    request_timeout_seconds: 45
+    max_attempts: 3
+  # Discord uses Gateway v10. Enable the Message Content intent for the bot.
+  discord:
+    enabled: false
+    bot_token: ""
+    allowed_guilds: []
+    allowed_channels: []
+    mention_only: false
+    thread_mode: false
+    request_timeout_seconds: 20
+    max_attempts: 3
 
 # Empty conversations receive a bounded local title after their first user
 # turn. Set model_name to use a configured model alias instead; failures still

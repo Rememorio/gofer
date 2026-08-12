@@ -65,11 +65,66 @@ func (service *Service) openChannels() error {
 			return err
 		}
 	}
+	if err = service.openNativeChannels(manager); err != nil {
+		_ = manager.Close()
+		return err
+	}
 	if err = manager.Start(service.ctx); err != nil {
 		_ = manager.Close()
 		return err
 	}
 	service.channelState, service.channels = state, manager
+	return nil
+}
+
+func (service *Service) openNativeChannels(manager *channel.Manager) error {
+	configured := service.config.Channels
+	if configured.Slack.Enabled {
+		provider, err := channel.NewSlack(channel.SlackConfig{
+			BotToken: configured.Slack.BotToken, AppToken: configured.Slack.AppToken,
+			BotUserID: configured.Slack.BotUserID, AllowedUsers: configured.Slack.AllowedUsers,
+			RequestTimeout: time.Duration(configured.Slack.RequestTimeoutSeconds) * time.Second,
+			MaxAttempts:    configured.Slack.MaxAttempts,
+		})
+		if err != nil {
+			return err
+		}
+		if err = manager.Register(provider); err != nil {
+			_ = provider.Close()
+			return err
+		}
+	}
+	if configured.Telegram.Enabled {
+		provider, err := channel.NewTelegram(channel.TelegramConfig{
+			BotToken: configured.Telegram.BotToken, AllowedUsers: configured.Telegram.AllowedUsers,
+			PollTimeout:    time.Duration(configured.Telegram.PollTimeoutSeconds) * time.Second,
+			RequestTimeout: time.Duration(configured.Telegram.RequestTimeoutSeconds) * time.Second,
+			MaxAttempts:    configured.Telegram.MaxAttempts,
+		})
+		if err != nil {
+			return err
+		}
+		if err = manager.Register(provider); err != nil {
+			_ = provider.Close()
+			return err
+		}
+	}
+	if configured.Discord.Enabled {
+		provider, err := channel.NewDiscord(channel.DiscordConfig{
+			BotToken: configured.Discord.BotToken, AllowedGuilds: configured.Discord.AllowedGuilds,
+			AllowedChannels: configured.Discord.AllowedChannels, MentionOnly: configured.Discord.MentionOnly,
+			ThreadMode:     configured.Discord.ThreadMode,
+			RequestTimeout: time.Duration(configured.Discord.RequestTimeoutSeconds) * time.Second,
+			MaxAttempts:    configured.Discord.MaxAttempts,
+		})
+		if err != nil {
+			return err
+		}
+		if err = manager.Register(provider); err != nil {
+			_ = provider.Close()
+			return err
+		}
+	}
 	return nil
 }
 
