@@ -84,15 +84,16 @@ func publicModel(model config.ModelConfig) modelResource {
 
 func (service *Service) listFeatures(writer http.ResponseWriter, _ *http.Request) {
 	writeResourceJSON(writer, http.StatusOK, map[string]any{
-		"browser_control":     map[string]bool{"enabled": service.browser != nil},
-		"skills":              map[string]bool{"enabled": service.skills != nil},
-		"memory":              map[string]bool{"enabled": service.memories != nil},
-		"scheduler":           map[string]bool{"enabled": service.config.Scheduler.Enabled},
-		"read_before_write":   map[string]bool{"enabled": service.config.ReadBeforeWrite.Enabled},
-		"loop_detection":      map[string]bool{"enabled": service.config.LoopDetection.Enabled},
-		"tool_history_repair": map[string]bool{"enabled": true},
-		"terminal_response":   map[string]bool{"enabled": true},
-		"model_length_reason": map[string]bool{"enabled": true},
+		"browser_control":      map[string]bool{"enabled": service.browser != nil},
+		"skills":               map[string]bool{"enabled": service.skills != nil},
+		"memory":               map[string]bool{"enabled": service.memories != nil},
+		"scheduler":            map[string]bool{"enabled": service.config.Scheduler.Enabled},
+		"read_before_write":    map[string]bool{"enabled": service.config.ReadBeforeWrite.Enabled},
+		"loop_detection":       map[string]bool{"enabled": service.config.LoopDetection.Enabled},
+		"tool_history_repair":  map[string]bool{"enabled": true},
+		"terminal_response":    map[string]bool{"enabled": true},
+		"model_length_reason":  map[string]bool{"enabled": true},
+		"safety_finish_reason": map[string]bool{"enabled": true},
 	})
 }
 

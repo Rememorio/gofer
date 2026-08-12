@@ -342,7 +342,7 @@ func (stream *stream) ingestChoice(choice openai.ChatCompletionChunkChoice) erro
 		return err
 	}
 	hasCalls := len(stream.calls) > 0
-	if hasCalls != (reason == model.StopToolUse) {
+	if invalidCallStopPair(hasCalls, reason) {
 		return fmt.Errorf("%w: finish reason %q with %d tool calls", ErrProtocol, choice.FinishReason, len(stream.calls))
 	}
 	if err := stream.flushCalls(); err != nil {
@@ -351,6 +351,13 @@ func (stream *stream) ingestChoice(choice openai.ChatCompletionChunkChoice) erro
 	stream.stopReason = reason
 	stream.finished = true
 	return nil
+}
+
+func invalidCallStopPair(hasCalls bool, reason model.StopReason) bool {
+	if reason == model.StopMaxTokens || reason == model.StopContentFilter {
+		return false
+	}
+	return hasCalls != (reason == model.StopToolUse)
 }
 
 func (stream *stream) accumulateCalls(deltas []openai.ChatCompletionChunkChoiceDeltaToolCall) error {

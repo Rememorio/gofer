@@ -257,6 +257,26 @@ func TestStreamCloseAndStopNormalization(t *testing.T) {
 	}
 }
 
+func TestStreamPreservesGuardedStopToolIntent(t *testing.T) {
+	t.Parallel()
+	for _, reason := range []string{"length", "content_filter"} {
+		t.Run(reason, func(t *testing.T) {
+			stream := &stream{source: &fakeSource{chunks: []openai.ChatCompletionChunk{
+				toolDelta("call", "write_file", `{"path":"partial"}`),
+				{Choices: []openai.ChatCompletionChunkChoice{{Index: 0, FinishReason: reason}}},
+			}}, calls: make(map[int64]*pendingCall)}
+			response, err := model.Collect(stream, nil)
+			if err != nil || len(response.ToolCalls) != 1 {
+				t.Fatalf("Collect() = %#v, %v", response, err)
+			}
+			want, _ := normalizeStop(reason)
+			if response.StopReason != want {
+				t.Fatalf("stop reason = %q, want %q", response.StopReason, want)
+			}
+		})
+	}
+}
+
 func assertRequestBody(t *testing.T, body []byte) {
 	t.Helper()
 	var payload struct {

@@ -37,6 +37,7 @@ import (
 	"github.com/Rememorio/gofer/internal/policy"
 	"github.com/Rememorio/gofer/internal/readbeforewrite"
 	"github.com/Rememorio/gofer/internal/runtime"
+	"github.com/Rememorio/gofer/internal/safetyfinish"
 	"github.com/Rememorio/gofer/internal/sandbox"
 	"github.com/Rememorio/gofer/internal/scheduler"
 	"github.com/Rememorio/gofer/internal/skill"
@@ -634,6 +635,9 @@ func (service *Service) runtimeMiddleware(threadID domain.ThreadID, provider con
 	if fileGate != nil {
 		middleware = append(middleware, fileGate)
 	}
+	// Safety suppression precedes loop accounting so provider-truncated tool
+	// intent never contributes to repetition state or reaches execution.
+	middleware = append(middleware, safetyfinish.New())
 	if service.config.LoopDetection.Enabled {
 		loopGuard, loopErr := loopdetect.New(loopDetectionConfig(service.config.LoopDetection))
 		if loopErr != nil {
@@ -645,8 +649,8 @@ func (service *Service) runtimeMiddleware(threadID domain.ThreadID, provider con
 	if err != nil {
 		return nil, err
 	}
-	// Repair runs last so compaction and every temporary context contribution
-	// have already produced the exact transcript sent to the provider.
+	// Repair runs after context producers so the provider sees paired tool
+	// history. Later response guards do not alter existing call/result pairs.
 	middleware = append(middleware, historyRepair)
 	middleware = append(middleware, modellength.New())
 	terminalGuard, err := terminalresponse.New(terminalresponse.DefaultConfig())

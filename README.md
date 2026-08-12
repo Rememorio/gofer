@@ -90,6 +90,10 @@ When a provider reaches its output-token limit after producing visible
 terminal text, Gofer preserves that partial answer and succeeds with the
 explicit `model_length_capped` reason. Empty or tool-bearing capped responses
 remain failures, so truncated tool arguments can never execute.
+Provider safety stops are repaired into visible `safety_capped` outcomes.
+Existing refusal text is preserved, empty responses receive a neutral
+explanation, and every accompanying tool call is removed before loop
+accounting, persistence, or execution.
 The `gofer serve` command now assembles the model provider, durable store,
 isolated workspaces, sandbox, browser, policy, runtime, gateway, graceful
 shutdown, and Prometheus endpoint into a runnable service. MCP tools, projected
@@ -138,6 +142,8 @@ Post-tool final-answer recovery is documented in
 [Terminal responses](docs/terminal-response.md).
 Provider output-length handling is documented in
 [Model length caps](docs/model-length.md).
+Provider content-filter handling is documented in
+[Safety finish reasons](docs/safety-finish.md).
 
 ## Development
 

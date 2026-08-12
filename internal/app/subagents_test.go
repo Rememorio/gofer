@@ -18,6 +18,7 @@ import (
 	"github.com/Rememorio/gofer/internal/modellength"
 	"github.com/Rememorio/gofer/internal/readbeforewrite"
 	"github.com/Rememorio/gofer/internal/runtime"
+	"github.com/Rememorio/gofer/internal/safetyfinish"
 	"github.com/Rememorio/gofer/internal/subagent"
 	"github.com/Rememorio/gofer/internal/terminalresponse"
 	"github.com/Rememorio/gofer/internal/toolhistory"
@@ -118,6 +119,27 @@ func TestChildExecutorSurfacesModelLengthCappedStopReason(t *testing.T) {
 	}
 }
 
+func TestChildExecutorSurfacesSafetyCappedStopReason(t *testing.T) {
+	t.Parallel()
+	service, threadWorkspace, launch := subagentFixture(t)
+	provider := &model.Scripted{Responses: [][]model.Chunk{{
+		{Kind: model.ChunkTextDelta, Text: "I cannot help with that."},
+		{Kind: model.ChunkDone, StopReason: model.StopContentFilter},
+	}}}
+	executor := childExecutor{
+		service: service, workspace: threadWorkspace, launch: launch,
+		provider: configuredProvider{provider: provider, model: "test"},
+	}
+	output, err := executor.Execute(context.Background(), subagent.Request{Prompt: "research", Depth: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.Text != "I cannot help with that." || output.Metadata["stop_reason"] != string(model.StopSafetyCapped) ||
+		output.Metadata["llm_call_count"] != "1" {
+		t.Fatalf("output = %#v", output)
+	}
+}
+
 func TestChildExecutorRequiresTextResult(t *testing.T) {
 	t.Parallel()
 	service, workspace, launch := subagentFixture(t)
@@ -197,13 +219,16 @@ func TestChildExecutorSharesRunObservers(t *testing.T) {
 
 func assertFileGateOrdering(t *testing.T, middleware []runtime.Middleware) {
 	t.Helper()
-	compactorIndex, gateIndex, loopIndex, repairIndex, lengthIndex, terminalIndex := -1, -1, -1, -1, -1, -1
+	compactorIndex, gateIndex, safetyIndex, loopIndex := -1, -1, -1, -1
+	repairIndex, lengthIndex, terminalIndex := -1, -1, -1
 	for index, candidate := range middleware {
 		switch candidate.(type) {
 		case *contextwindow.Compactor:
 			compactorIndex = index
 		case *readbeforewrite.Middleware:
 			gateIndex = index
+		case *safetyfinish.Middleware:
+			safetyIndex = index
 		case *loopdetect.Middleware:
 			loopIndex = index
 		case *toolhistory.Middleware:
@@ -214,7 +239,7 @@ func assertFileGateOrdering(t *testing.T, middleware []runtime.Middleware) {
 			terminalIndex = index
 		}
 	}
-	if compactorIndex < 0 || gateIndex <= compactorIndex || loopIndex <= gateIndex ||
+	if compactorIndex < 0 || gateIndex <= compactorIndex || safetyIndex <= gateIndex || loopIndex <= safetyIndex ||
 		repairIndex <= loopIndex || lengthIndex <= repairIndex || terminalIndex <= lengthIndex {
 		t.Fatalf("runtime guards are out of order: %#v", middleware)
 	}
@@ -249,7 +274,7 @@ func TestBuildToolsClosesChildrenOnAssemblyErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = children.Close() }()
-	repairSeen, lengthSeen, terminalSeen := false, false, false
+	safetySeen, repairSeen, lengthSeen, terminalSeen := false, false, false, false
 	for _, candidate := range middleware {
 		if _, ok := candidate.(*readbeforewrite.Middleware); ok {
 			t.Fatal("disabled read-before-write gate was assembled")
@@ -266,8 +291,11 @@ func TestBuildToolsClosesChildrenOnAssemblyErrors(t *testing.T) {
 		if _, ok := candidate.(*modellength.Middleware); ok {
 			lengthSeen = true
 		}
+		if _, ok := candidate.(*safetyfinish.Middleware); ok {
+			safetySeen = true
+		}
 	}
-	if !repairSeen || !lengthSeen || !terminalSeen {
+	if !safetySeen || !repairSeen || !lengthSeen || !terminalSeen {
 		t.Fatal("always-on response guards were not assembled")
 	}
 }

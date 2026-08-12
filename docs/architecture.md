@@ -47,6 +47,7 @@ Planned package groups:
 | `internal/toolhistory` | Transient provider-safe tool call/result transcript repair |
 | `internal/terminalresponse` | Bounded empty post-tool response recovery and visible fallback |
 | `internal/modellength` | Safe visible provider length-cap preservation |
+| `internal/safetyfinish` | Provider content-filter repair and unsafe tool-intent suppression |
 | `internal/tooloutput` | Typed result synopsis, atomic spill storage, and context-budget fallback |
 | `internal/mcp` | MCP transports, bounded discovery, and namespaced tool adapters |
 | `internal/policy` | Ordered authorization rules and tool resource extraction |
@@ -98,3 +99,4 @@ Planned package groups:
 26. Every provider-bound tool call has exactly one adjacent result; recovery never rewrites durable history.
 27. A tool-using user turn ends with visible assistant text or an explicit durable run failure.
 28. Length-capped tool intent never executes; only visible tool-free partial text may complete as capped.
+29. Safety-capped responses are always visible and tool-free before any other response policy observes them.

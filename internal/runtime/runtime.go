@@ -673,6 +673,9 @@ func assistantMessage(response model.Response, at time.Time) (domain.Message, er
 			"internal_kind": "terminal_response_fallback", "error_reason": ErrTerminalResponse.Error(),
 		}
 	}
+	if response.StopReason == model.StopSafetyCapped {
+		message.Metadata = map[string]string{"internal_kind": "safety_termination"}
+	}
 	if err := message.Validate(); err != nil {
 		return domain.Message{}, fmt.Errorf("build assistant message: %w", err)
 	}

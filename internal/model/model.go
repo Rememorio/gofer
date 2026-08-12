@@ -94,6 +94,10 @@ const (
 	// its output-token limit. Providers emit StopMaxTokens; host middleware
 	// promotes only safe terminal text to this run-level reason.
 	StopModelLengthCapped StopReason = "model_length_capped"
+	// StopSafetyCapped identifies a provider safety stop after any tool intent
+	// was suppressed. Providers emit StopContentFilter; host middleware
+	// promotes the repaired terminal response to this run-level reason.
+	StopSafetyCapped StopReason = "safety_capped"
 )
 
 // Response is the fully collected result of one model stream.
@@ -228,7 +232,7 @@ func (usage Usage) valid() bool {
 func (reason StopReason) valid() bool {
 	switch reason {
 	case StopEndTurn, StopToolUse, StopMaxTokens, StopContentFilter, StopLoopCapped,
-		StopTerminalError, StopModelLengthCapped:
+		StopTerminalError, StopModelLengthCapped, StopSafetyCapped:
 		return true
 	default:
 		return false

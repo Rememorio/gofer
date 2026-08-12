@@ -77,6 +77,12 @@ Optional agent extensions are initialized before the listener becomes ready:
   completes with `stop_reason: model_length_capped`. Empty capped responses and
   responses that still carry tool intent fail with the provider truncation
   error; their tool calls are never journaled or executed.
+- Safety finish-reason handling is always active. Provider `content_filter`
+  responses complete with `stop_reason: safety_capped`. Visible refusal text is
+  retained unchanged; an empty response receives a neutral explanation. Any
+  accompanying tool calls are removed before loop accounting, assistant
+  journaling, or execution, and the durable assistant message is tagged as a
+  safety termination.
 - `subagent_spawn` starts bounded parallel child agents. Each child gets an
   isolated run journal and tool registry while sharing only the parent's
   policy-controlled workspace, configured extensions, and tenant scope. The
