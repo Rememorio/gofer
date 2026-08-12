@@ -321,6 +321,27 @@ func (workspace *Thread) WriteFile(virtualPath string, content []byte, appendMod
 	return workspace.writeLocked(relative, content, appendMode)
 }
 
+// CreateOutput atomically creates a binary artifact under OutputsRoot without
+// overwriting an existing file.
+func (workspace *Thread) CreateOutput(virtualPath string, content []byte) error {
+	relative, err := normalizeVirtualPath(virtualPath)
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(relative, "outputs/") {
+		return fmt.Errorf("%w: output must be a file below %s", ErrInvalidPath, OutputsRoot)
+	}
+	if int64(len(content)) > workspace.maxUploadBytes {
+		return fmt.Errorf("%w: output limit is %d bytes", ErrTooLarge, workspace.maxUploadBytes)
+	}
+	unlock := workspace.locks.lock(relative)
+	defer unlock()
+	if err := workspace.root.MkdirAll(localName(path.Dir(relative)), 0o700); err != nil {
+		return err
+	}
+	return workspace.writeExclusive(relative, content)
+}
+
 // Replace performs an exact, serialized text replacement.
 func (workspace *Thread) Replace(virtualPath, oldText, newText string, replaceAll bool) error {
 	if oldText == "" {

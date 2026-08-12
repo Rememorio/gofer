@@ -28,6 +28,16 @@ sandbox:
   cpus: 2
   pids_limit: 256
 
+browser:
+  enabled: false
+  headful: false
+  allow_private_addresses: false
+  max_sessions: 32
+  idle_timeout_seconds: 1800
+  action_timeout_seconds: 30
+  viewport_width: 1280
+  viewport_height: 720
+
 models:
   - name: primary
     provider: openai

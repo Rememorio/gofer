@@ -58,6 +58,9 @@ models:
 	if config.Sandbox.CommandTimeoutSeconds != 600 || config.Sandbox.NetworkEnabled {
 		t.Fatalf("default sandbox limits were not preserved: %#v", config.Sandbox)
 	}
+	if config.Browser.MaxSessions != 32 || config.Browser.Enabled {
+		t.Fatalf("default browser settings were not preserved: %#v", config.Browser)
+	}
 }
 
 func TestLoadRejectsInvalidInput(t *testing.T) {
@@ -109,6 +112,17 @@ func TestValidateRejectsInvalidConfigurations(t *testing.T) {
 		{name: "host execution driver", mutate: func(config *Config) {
 			config.Sandbox.Driver, config.Sandbox.Image, config.Sandbox.AllowHostExecution = "docker", "gofer:test", true
 		}},
+		{name: "browser sessions zero", mutate: func(config *Config) { config.Browser.MaxSessions = 0 }},
+		{name: "browser sessions high", mutate: func(config *Config) { config.Browser.MaxSessions = 1025 }},
+		{name: "browser idle timeout", mutate: func(config *Config) { config.Browser.IdleTimeoutSeconds = 0 }},
+		{name: "browser action timeout zero", mutate: func(config *Config) { config.Browser.ActionTimeoutSeconds = 0 }},
+		{name: "browser action timeout high", mutate: func(config *Config) { config.Browser.ActionTimeoutSeconds = 601 }},
+		{name: "browser viewport width low", mutate: func(config *Config) { config.Browser.ViewportWidth = 319 }},
+		{name: "browser viewport width high", mutate: func(config *Config) { config.Browser.ViewportWidth = 7681 }},
+		{name: "browser viewport height low", mutate: func(config *Config) { config.Browser.ViewportHeight = 199 }},
+		{name: "browser viewport height high", mutate: func(config *Config) { config.Browser.ViewportHeight = 4321 }},
+		{name: "browser executable NUL", mutate: func(config *Config) { config.Browser.ExecutablePath = "chrome\x00" }},
+		{name: "browser remote NUL", mutate: func(config *Config) { config.Browser.RemoteURL = "ws://chrome\x00" }},
 		{name: "model field", mutate: func(config *Config) { config.Models = []ModelConfig{{Name: "x"}} }},
 		{name: "model duplicate", mutate: func(config *Config) {
 			config.Models = []ModelConfig{{Name: "x", Provider: "p", Model: "m"}, {Name: "x", Provider: "p", Model: "m"}}

@@ -18,7 +18,10 @@ place. MCP servers can contribute validated tools over stdio or Streamable
 HTTP, and Skills packages support strict metadata, persistent enablement,
 progressive discovery, and atomic read-only projection. It is not yet a
 drop-in DeerFlow replacement. Bounded shell execution is available through a
-fail-closed local driver or hardened ephemeral Docker containers.
+fail-closed local driver or hardened ephemeral Docker containers. Stateful,
+thread-scoped browser automation is available through Chrome DevTools Protocol
+with bounded sessions, stable snapshot references, screenshot artifacts, and
+request-level SSRF policy enforcement.
 
 ## Design
 
@@ -36,7 +39,8 @@ fail-closed local driver or hardened ephemeral Docker containers.
 See [Architecture](docs/architecture.md) for the planned component boundaries
 and [Roadmap](docs/roadmap.md) for the implementation sequence. Command
 isolation and its trust boundaries are documented in
-[Sandbox](docs/sandbox.md).
+[Sandbox](docs/sandbox.md). Browser lifecycle and network boundaries are
+documented in [Browser automation](docs/browser.md).
 
 ## Development
 

@@ -41,6 +41,7 @@ Planned package groups:
 | `internal/workspace` | Per-thread files, uploads, outputs, search, and traversal safety |
 | `internal/artifact` | Explicit user-facing output registration and streaming |
 | `internal/sandbox` | Local and isolated execution contracts |
+| `internal/browser` | Thread-scoped CDP sessions, snapshots, network guards, and browser tools |
 | `internal/skill` | Skill discovery, validation, activation, and projection |
 | `internal/subagent` | Bounded parallel delegation and event fan-in |
 | `internal/memory` | Scoped retrieval, consolidation, and lifecycle |
@@ -60,3 +61,4 @@ Planned package groups:
 8. Extension discovery is bounded and publishes an atomic validated snapshot.
 9. Skill packages never follow symlinks and project into an agent-visible read-only tree.
 10. Host command execution is disabled by default; container execution starts from a read-only, capability-free, network-isolated baseline.
+11. Browser navigation and every intercepted HTTP request pass through the same fail-closed address policy.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -424,6 +425,29 @@ func TestExecutionMounts(t *testing.T) {
 	var nilWorkspace *Thread
 	if mounts := nilWorkspace.ExecutionMounts(); mounts != nil {
 		t.Fatalf("nil ExecutionMounts() = %#v", mounts)
+	}
+}
+
+func TestCreateBinaryOutput(t *testing.T) {
+	t.Parallel()
+
+	workspace := newTestWorkspace(t, Config{MaxUploadBytes: 4})
+	defer func() { _ = workspace.Close() }()
+	name := OutputsRoot + "/captures/page.png"
+	if err := workspace.CreateOutput(name, []byte{0, 1, 2}); err != nil {
+		t.Fatalf("CreateOutput(): %v", err)
+	}
+	if err := workspace.CreateOutput(name, []byte("new")); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("CreateOutput(existing) error = %v, want fs.ErrExist", err)
+	}
+	if err := workspace.CreateOutput(WorkspaceRoot+"/bad", []byte("x")); !errors.Is(err, ErrInvalidPath) {
+		t.Fatalf("CreateOutput(workspace) error = %v", err)
+	}
+	if err := workspace.CreateOutput(OutputsRoot, []byte("x")); !errors.Is(err, ErrInvalidPath) {
+		t.Fatalf("CreateOutput(root) error = %v", err)
+	}
+	if err := workspace.CreateOutput(OutputsRoot+"/large", []byte("12345")); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("CreateOutput(large) error = %v", err)
 	}
 }
 

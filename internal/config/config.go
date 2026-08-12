@@ -30,6 +30,7 @@ type Config struct {
 	Runtime  RuntimeConfig `yaml:"runtime" json:"runtime"`
 	Storage  StorageConfig `yaml:"storage" json:"storage"`
 	Sandbox  SandboxConfig `yaml:"sandbox" json:"sandbox"`
+	Browser  BrowserConfig `yaml:"browser" json:"browser"`
 	Models   []ModelConfig `yaml:"models" json:"models"`
 }
 
@@ -66,6 +67,20 @@ type SandboxConfig struct {
 	Memory                string  `yaml:"memory" json:"memory,omitempty"`
 	CPUs                  float64 `yaml:"cpus" json:"cpus,omitempty"`
 	PIDsLimit             int     `yaml:"pids_limit" json:"pids_limit,omitempty"`
+}
+
+// BrowserConfig controls bounded thread-scoped Chrome automation.
+type BrowserConfig struct {
+	Enabled               bool   `yaml:"enabled" json:"enabled"`
+	ExecutablePath        string `yaml:"executable_path" json:"executable_path,omitempty"`
+	RemoteURL             string `yaml:"remote_url" json:"-"`
+	Headful               bool   `yaml:"headful" json:"headful"`
+	AllowPrivateAddresses bool   `yaml:"allow_private_addresses" json:"allow_private_addresses"`
+	MaxSessions           int    `yaml:"max_sessions" json:"max_sessions"`
+	IdleTimeoutSeconds    int    `yaml:"idle_timeout_seconds" json:"idle_timeout_seconds"`
+	ActionTimeoutSeconds  int    `yaml:"action_timeout_seconds" json:"action_timeout_seconds"`
+	ViewportWidth         int    `yaml:"viewport_width" json:"viewport_width"`
+	ViewportHeight        int    `yaml:"viewport_height" json:"viewport_height"`
 }
 
 // ModelConfig names one model exposed to agent runs.
@@ -109,6 +124,10 @@ func Defaults() Config {
 			Driver: "local", DockerBinary: "docker", CommandTimeoutSeconds: 600,
 			MaxTimeoutSeconds: 3600, MaxOutputBytes: 1 << 20, MaxScriptBytes: 64 << 10,
 			Memory: "1g", CPUs: 2, PIDsLimit: 256,
+		},
+		Browser: BrowserConfig{
+			MaxSessions: 32, IdleTimeoutSeconds: 1800, ActionTimeoutSeconds: 30,
+			ViewportWidth: 1280, ViewportHeight: 720,
 		},
 	}
 }
@@ -172,6 +191,9 @@ func (config Config) Validate() error {
 	if err := validateSandbox(config.Sandbox); err != nil {
 		return err
 	}
+	if err := validateBrowser(config.Browser); err != nil {
+		return err
+	}
 	return validateModels(config.Models)
 }
 
@@ -216,6 +238,19 @@ func validateSandbox(sandbox SandboxConfig) error {
 	}
 	if sandbox.Driver != "local" && sandbox.AllowHostExecution {
 		return fmt.Errorf("%w: allow_host_execution is only valid for local sandbox", ErrInvalid)
+	}
+	return nil
+}
+
+func validateBrowser(browser BrowserConfig) error {
+	if browser.MaxSessions <= 0 || browser.MaxSessions > 1024 ||
+		browser.IdleTimeoutSeconds <= 0 || browser.ActionTimeoutSeconds <= 0 ||
+		browser.ActionTimeoutSeconds > 600 || browser.ViewportWidth < 320 ||
+		browser.ViewportWidth > 7680 || browser.ViewportHeight < 200 || browser.ViewportHeight > 4320 {
+		return fmt.Errorf("%w: invalid browser limits or viewport", ErrInvalid)
+	}
+	if strings.IndexByte(browser.ExecutablePath, 0) >= 0 || strings.IndexByte(browser.RemoteURL, 0) >= 0 {
+		return fmt.Errorf("%w: browser endpoint contains NUL", ErrInvalid)
 	}
 	return nil
 }
