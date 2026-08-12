@@ -18,16 +18,20 @@ import (
 	"github.com/Rememorio/gofer/internal/auth"
 	"github.com/Rememorio/gofer/internal/browser"
 	"github.com/Rememorio/gofer/internal/config"
+	"github.com/Rememorio/gofer/internal/contextwindow"
 	"github.com/Rememorio/gofer/internal/control"
 	"github.com/Rememorio/gofer/internal/domain"
 	"github.com/Rememorio/gofer/internal/event"
 	"github.com/Rememorio/gofer/internal/gateway"
+	"github.com/Rememorio/gofer/internal/mcp"
+	"github.com/Rememorio/gofer/internal/memory"
 	"github.com/Rememorio/gofer/internal/model"
 	"github.com/Rememorio/gofer/internal/model/openaichat"
 	"github.com/Rememorio/gofer/internal/observe"
 	"github.com/Rememorio/gofer/internal/policy"
 	"github.com/Rememorio/gofer/internal/runtime"
 	"github.com/Rememorio/gofer/internal/sandbox"
+	"github.com/Rememorio/gofer/internal/skill"
 	"github.com/Rememorio/gofer/internal/store"
 	"github.com/Rememorio/gofer/internal/store/sqlstore"
 	"github.com/Rememorio/gofer/internal/tool"
@@ -46,6 +50,10 @@ type Service struct {
 	artifacts  *artifact.Catalog
 	controls   *control.Service
 	browser    *browser.Manager
+	mcp        *mcp.Client
+	skills     *skill.Catalog
+	skillMount string
+	memories   memory.Store
 	providers  map[string]configuredProvider
 	metrics    *observe.Registry
 	handler    http.Handler
@@ -107,11 +115,65 @@ func (service *Service) open() error {
 	if err = service.openBrowser(); err != nil {
 		return err
 	}
+	if err = service.openAgentExtensions(); err != nil {
+		return err
+	}
 	service.metrics, err = newMetrics()
 	if err != nil {
 		return err
 	}
 	return service.openHandler()
+}
+
+func (service *Service) openAgentExtensions() error {
+	if service.config.Memory.Enabled {
+		service.memories = memory.NewInMemory()
+	}
+	if service.config.Skills.Enabled {
+		catalog, err := skill.NewCatalog(skill.Config{
+			Root: service.config.Skills.Root, MaxDocumentBytes: service.config.Skills.MaxDocumentBytes,
+			MaxPackageBytes: service.config.Skills.MaxPackageBytes,
+		})
+		if err != nil {
+			return err
+		}
+		if err = catalog.Refresh(service.ctx); err != nil {
+			return fmt.Errorf("refresh skills: %w", err)
+		}
+		if err = catalog.Project(service.ctx, service.config.Skills.ProjectionRoot); err != nil {
+			return fmt.Errorf("project skills: %w", err)
+		}
+		service.skills = catalog
+		service.skillMount, err = filepath.Abs(service.config.Skills.ProjectionRoot)
+		if err != nil {
+			return fmt.Errorf("resolve skill projection: %w", err)
+		}
+	}
+	if service.config.MCP.Enabled {
+		client, err := mcp.New(mcp.Config{Servers: mcpServers(service.config.MCP.Servers)})
+		if err != nil {
+			return err
+		}
+		if err = client.Connect(service.ctx); err != nil {
+			return err
+		}
+		service.mcp = client
+	}
+	return nil
+}
+
+func mcpServers(configs []config.MCPServerConfig) []mcp.ServerConfig {
+	servers := make([]mcp.ServerConfig, len(configs))
+	for index, server := range configs {
+		servers[index] = mcp.ServerConfig{
+			Name: server.Name, Transport: mcp.Transport(server.Transport), Command: server.Command,
+			Arguments: append([]string(nil), server.Arguments...), Environment: server.Environment,
+			WorkingDirectory: server.WorkingDirectory, URL: server.URL, Headers: server.Headers,
+			AllowInsecureHTTP: server.AllowInsecureHTTP, DisableStandaloneSSE: server.DisableStandaloneSSE,
+			MaxRetries: server.MaxRetries,
+		}
+	}
+	return servers
 }
 
 func openStore(ctx context.Context, cfg config.StorageConfig) (store.Store, io.Closer, error) {
@@ -273,10 +335,13 @@ func (service *Service) execute(ctx context.Context, launch gateway.StartRequest
 		return
 	}
 	defer func() { _ = threadWorkspace.Close() }()
-	registry, middleware, err := service.buildTools(threadWorkspace, launch)
+	registry, middleware, err := service.buildTools(threadWorkspace, launch, provider)
 	if err != nil {
 		service.failPending(launch, err)
 		return
+	}
+	if service.skills != nil {
+		settings.system = strings.TrimSpace(settings.system + "\n\n" + service.skills.IndexPrompt())
 	}
 	runner, err := runtime.NewRunner(runtime.RunnerConfig{
 		Store: service.store, Provider: provider.provider, Tools: registry, Middleware: middleware,
@@ -307,49 +372,120 @@ func (service *Service) execute(ctx context.Context, launch gateway.StartRequest
 	_ = service.metrics.Observe("gofer_run_duration_seconds", map[string]string{"status": status}, time.Since(started).Seconds())
 }
 
-func (service *Service) buildTools(threadWorkspace *workspace.Thread, launch gateway.StartRequest) (*tool.Registry, []runtime.Middleware, error) {
+func (service *Service) buildTools(threadWorkspace *workspace.Thread, launch gateway.StartRequest, provider configuredProvider) (*tool.Registry, []runtime.Middleware, error) {
 	registry := tool.NewRegistry()
-	if err := (builtin.WorkspaceTools{Workspace: threadWorkspace, Artifacts: service.artifacts}).Register(registry); err != nil {
+	if err := service.registerCoreTools(registry, threadWorkspace, launch); err != nil {
 		return nil, nil, err
 	}
-	if err := (control.Tools{Service: service.controls, ThreadID: launch.ThreadID}).Register(registry); err != nil {
+	if err := service.registerExtensionTools(registry, launch.ThreadID); err != nil {
 		return nil, nil, err
+	}
+	middleware, err := service.runtimeMiddleware(launch.ThreadID, provider)
+	if err != nil {
+		return nil, nil, err
+	}
+	return registry, middleware, nil
+}
+
+func (service *Service) registerCoreTools(registry *tool.Registry, threadWorkspace *workspace.Thread, launch gateway.StartRequest) error {
+	if err := (builtin.WorkspaceTools{Workspace: threadWorkspace, Artifacts: service.artifacts}).Register(registry); err != nil {
+		return err
+	}
+	if err := (control.Tools{Service: service.controls, ThreadID: launch.ThreadID}).Register(registry); err != nil {
+		return err
 	}
 	executor, err := service.commandExecutor(threadWorkspace)
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
 	commandTool, err := (sandbox.CommandTool{Executor: executor}).Tool()
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
 	if err = registry.Register(commandTool); err != nil {
-		return nil, nil, err
+		return err
 	}
 	if service.browser != nil {
 		err = (browser.Tools{Manager: service.browser, Key: string(launch.ThreadID), Workspace: threadWorkspace, Artifacts: service.artifacts}).Register(registry)
 		if err != nil {
-			return nil, nil, err
+			return err
 		}
 	}
+	return nil
+}
+
+func (service *Service) registerExtensionTools(registry *tool.Registry, threadID domain.ThreadID) error {
+	if service.mcp != nil {
+		if err := service.mcp.Register(registry); err != nil {
+			return err
+		}
+	}
+	if service.skills != nil {
+		if err := registry.RegisterAll(service.skills.DescribeTool(), service.skills.ReadTool()); err != nil {
+			return err
+		}
+	}
+	if service.memories != nil {
+		return (memory.Tools{Store: service.memories, Scope: memoryScope(threadID)}).Register(registry)
+	}
+	return nil
+}
+
+func (service *Service) runtimeMiddleware(threadID domain.ThreadID, provider configuredProvider) ([]runtime.Middleware, error) {
 	descriptors := mergeDescriptors(builtin.PolicyDescriptors(), control.PolicyDescriptors(), sandbox.PolicyDescriptors())
 	if service.browser != nil {
 		descriptors = mergeDescriptors(descriptors, browser.PolicyDescriptors())
 	}
+	if service.memories != nil {
+		descriptors = mergeDescriptors(descriptors, memory.PolicyDescriptors())
+	}
 	authorizer, err := policy.NewStatic(policy.DecisionAllow)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	policyMiddleware, err := policy.NewMiddleware(authorizer, descriptors)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return registry, []runtime.Middleware{policyMiddleware}, nil
+	middleware := []runtime.Middleware{policyMiddleware}
+	if service.memories != nil {
+		memoryMiddleware, memoryErr := memory.NewMiddleware(memory.MiddlewareConfig{
+			Store: service.memories, Scope: memoryScope(threadID), Limit: service.config.Memory.Limit,
+			MaxChars: service.config.Memory.MaxChars,
+		})
+		if memoryErr != nil {
+			return nil, memoryErr
+		}
+		middleware = append(middleware, memoryMiddleware)
+	}
+	compactor, err := contextwindow.New(contextwindow.Config{
+		MaxTokens: service.config.Runtime.MaxContextTokens, ReserveTokens: service.config.Runtime.ReserveTokens,
+		MinRecentMessages:    service.config.Runtime.MinRecentMessages,
+		MaxSummaryCharacters: service.config.Runtime.MaxSummaryChars,
+		Summarizer:           modelSummarizer{provider: provider.provider, model: provider.model, maxTokens: min(4096, service.config.Runtime.ReserveTokens)},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return append(middleware, compactor), nil
+}
+
+func memoryScope(threadID domain.ThreadID) memory.ScopeProvider {
+	return func(ctx context.Context) (memory.Scope, error) {
+		userID := "local"
+		if principal, ok := auth.PrincipalFromContext(ctx); ok {
+			userID = principal.ID
+		}
+		return memory.Scope{UserID: userID, ThreadID: string(threadID)}, nil
+	}
 }
 
 func (service *Service) commandExecutor(threadWorkspace *workspace.Thread) (sandbox.Executor, error) {
 	cfg := service.config.Sandbox
 	mounts := sandbox.MountsFromWorkspace(threadWorkspace.ExecutionMounts())
+	if service.skillMount != "" {
+		mounts = append(mounts, sandbox.Mount{Source: service.skillMount, Target: skill.DefaultVirtualRoot, ReadOnly: true})
+	}
 	commonTimeout := time.Duration(cfg.CommandTimeoutSeconds) * time.Second
 	maxTimeout := time.Duration(cfg.MaxTimeoutSeconds) * time.Second
 	switch cfg.Driver {
@@ -471,6 +607,12 @@ func (service *Service) Close() error {
 		service.wait.Wait()
 		if service.browser != nil {
 			service.err = errors.Join(service.err, service.browser.Close())
+		}
+		if service.mcp != nil {
+			service.err = errors.Join(service.err, service.mcp.Close())
+		}
+		if service.skills != nil {
+			service.err = errors.Join(service.err, service.skills.RemoveProjection(service.config.Skills.ProjectionRoot))
 		}
 		if service.closeStore != nil {
 			service.err = errors.Join(service.err, service.closeStore.Close())

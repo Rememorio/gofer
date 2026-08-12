@@ -9,6 +9,10 @@ runtime:
   max_parallel_tools: 8
   max_subagents: 8
   event_buffer: 128
+  max_context_tokens: 120000
+  reserve_tokens: 8000
+  min_recent_messages: 8
+  max_summary_chars: 20000
 
 storage:
   driver: sqlite
@@ -43,6 +47,22 @@ browser:
   action_timeout_seconds: 30
   viewport_width: 1280
   viewport_height: 720
+
+skills:
+  enabled: false
+  root: skills
+  projection_root: .gofer/skills
+  max_document_bytes: 1048576
+  max_package_bytes: 10485760
+
+mcp:
+  enabled: false
+  servers: []
+
+memory:
+  enabled: true
+  limit: 5
+  max_chars: 8192
 
 auth:
   enabled: false

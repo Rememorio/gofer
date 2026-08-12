@@ -35,6 +35,30 @@ func (catalog *Catalog) DescribeTool() tool.Tool {
 	}
 }
 
+// ReadTool constructs the bounded SKILL.md content reader.
+func (catalog *Catalog) ReadTool() tool.Tool {
+	return tool.Func{
+		DefinitionValue: tool.Definition{
+			Name: "read_skill", Description: "Read an enabled skill's validated SKILL.md instructions by exact name.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","minLength":1}},"required":["name"],"additionalProperties":false}`), ReadOnly: true,
+		},
+		ExecuteFunc: func(ctx context.Context, arguments json.RawMessage) (json.RawMessage, error) {
+			var input struct {
+				Name string `json:"name"`
+			}
+			if err := json.Unmarshal(arguments, &input); err != nil {
+				return nil, fmt.Errorf("decode read_skill arguments: %w", err)
+			}
+			document, err := catalog.Load(ctx, input.Name)
+			if err != nil {
+				output, _ := json.Marshal(map[string]string{"error": err.Error()})
+				return nil, tool.NewResultError(output)
+			}
+			return json.Marshal(map[string]string{"name": input.Name, "content": document})
+		},
+	}
+}
+
 // RenderDescription returns safe human-readable metadata for matching skills.
 func RenderDescription(skills []Skill) string {
 	blocks := make([]string, 0, len(skills))

@@ -29,7 +29,9 @@ The durable service boundary now includes DeerFlow-shaped thread and run
 responses, resumable run-event SSE, and transactional SQLite/PostgreSQL stores.
 The `gofer serve` command now assembles the model provider, durable store,
 isolated workspaces, sandbox, browser, policy, runtime, gateway, graceful
-shutdown, and Prometheus endpoint into a runnable service. Service control primitives include digest-only bearer credentials and RBAC,
+shutdown, and Prometheus endpoint into a runnable service. MCP tools, projected
+skills, scoped memory recall and editing, and model-backed context compaction
+are wired into every run when enabled. Service control primitives include digest-only bearer credentials and RBAC,
 leased cron/one-shot scheduling, authenticated channel normalization,
 dependency-ordered extensions, and bounded-cardinality Prometheus metrics.
 

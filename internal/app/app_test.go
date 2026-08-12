@@ -17,6 +17,9 @@ import (
 	"testing"
 	"time"
 
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/Rememorio/gofer/internal/auth"
 	"github.com/Rememorio/gofer/internal/config"
 	"github.com/Rememorio/gofer/internal/domain"
 	"github.com/Rememorio/gofer/internal/gateway"
@@ -286,8 +289,8 @@ func TestServiceAssemblesBrowserAndDockerTools(t *testing.T) {
 	}
 	defer func() { _ = threadWorkspace.Close() }()
 	run, _ := domain.NewRun(thread.ID, time.Now())
-	registry, middleware, err := service.buildTools(threadWorkspace, gateway.StartRequest{RunID: run.ID, ThreadID: thread.ID})
-	if err != nil || len(registry.Definitions()) < 20 || len(middleware) != 1 {
+	registry, middleware, err := service.buildTools(threadWorkspace, gateway.StartRequest{RunID: run.ID, ThreadID: thread.ID}, service.providers["primary"])
+	if err != nil || len(registry.Definitions()) < 20 || len(middleware) != 3 {
 		t.Fatalf("buildTools() = %d, %d, %v", len(registry.Definitions()), len(middleware), err)
 	}
 	if err = service.Close(); err != nil {
@@ -315,6 +318,96 @@ func TestServiceAssemblesBrowserAndDockerTools(t *testing.T) {
 	}
 	_ = remoteWorkspace.Close()
 	_ = remoteService.Close()
+}
+
+func TestServiceAssemblesSkillsAndScopedMemory(t *testing.T) {
+	t.Parallel()
+	modelServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer modelServer.Close()
+	cfg := testConfig(t, modelServer.URL+"/v1")
+	skillRoot := t.TempDir()
+	document := "---\nname: demo\ndescription: Demonstrate a workflow\n---\n# Instructions\nUse the demo workflow.\n"
+	directory := filepath.Join(skillRoot, "public", "demo")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "SKILL.md"), []byte(document), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Skills.Enabled = true
+	cfg.Skills.Root = skillRoot
+	cfg.Skills.ProjectionRoot = filepath.Join(t.TempDir(), "projection")
+	service, err := New(context.Background(), cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = service.Close() }()
+	if service.skills == nil || service.memories == nil || service.skillMount == "" {
+		t.Fatalf("extensions = %#v, %#v, %q", service.skills, service.memories, service.skillMount)
+	}
+	thread, _ := domain.NewThread(time.Now())
+	threadWorkspace, err := service.workspaces.Open(thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = threadWorkspace.Close() }()
+	run, _ := domain.NewRun(thread.ID, time.Now())
+	registry, middleware, err := service.buildTools(threadWorkspace, gateway.StartRequest{RunID: run.ID, ThreadID: thread.ID}, service.providers["primary"])
+	if err != nil || len(middleware) != 3 {
+		t.Fatalf("buildTools() = %d, %v", len(middleware), err)
+	}
+	names := make(map[string]bool)
+	for _, definition := range registry.Definitions() {
+		names[definition.Name] = true
+	}
+	for _, name := range []string{"describe_skill", "read_skill", "memory_search", "memory_upsert", "memory_delete"} {
+		if !names[name] {
+			t.Fatalf("missing tool %s", name)
+		}
+	}
+	principalContext := auth.WithPrincipal(context.Background(), auth.Principal{ID: "alice", Permissions: []auth.Permission{auth.Admin}})
+	scope, err := memoryScope(thread.ID)(principalContext)
+	if err != nil || scope.UserID != "alice" || scope.ThreadID != string(thread.ID) {
+		t.Fatalf("scope = %#v, %v", scope, err)
+	}
+	local, _ := memoryScope(thread.ID)(context.Background())
+	if local.UserID != "local" {
+		t.Fatalf("local scope = %#v", local)
+	}
+	servers := mcpServers([]config.MCPServerConfig{{Name: "one", Transport: "stdio", Command: "cmd", Arguments: []string{"arg"}, Environment: map[string]string{"TOKEN": "x"}}})
+	if len(servers) != 1 || servers[0].Name != "one" || servers[0].Command != "cmd" {
+		t.Fatalf("mcpServers() = %#v", servers)
+	}
+}
+
+func TestServiceConnectsMCPAtStartup(t *testing.T) {
+	t.Parallel()
+	protocolServer := sdk.NewServer(&sdk.Implementation{Name: "test", Version: "1"}, nil)
+	protocolHandler := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return protocolServer }, &sdk.StreamableHTTPOptions{Stateless: true})
+	protocolHTTP := httptest.NewServer(protocolHandler)
+	defer protocolHTTP.Close()
+	modelServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer modelServer.Close()
+	cfg := testConfig(t, modelServer.URL+"/v1")
+	cfg.MCP = config.MCPConfig{Enabled: true, Servers: []config.MCPServerConfig{{
+		Name: "remote", Transport: "streamable_http", URL: protocolHTTP.URL, AllowInsecureHTTP: true,
+	}}}
+	service, err := New(context.Background(), cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.mcp == nil {
+		t.Fatal("MCP client was not assembled")
+	}
+	if err = service.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	bad := testConfig(t, modelServer.URL+"/v1")
+	bad.MCP = config.MCPConfig{Enabled: true, Servers: []config.MCPServerConfig{{Name: "remote", Transport: "streamable_http", URL: "not-a-url"}}}
+	if _, err = New(context.Background(), bad, nil); err == nil {
+		t.Fatal("New(bad MCP) error = nil")
+	}
 }
 
 func TestServeStopsWithContext(t *testing.T) {

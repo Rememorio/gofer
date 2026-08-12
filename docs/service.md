@@ -18,6 +18,21 @@ connection string for a shared service. The local sandbox remains disabled
 until `allow_host_execution: true` is set explicitly; Docker is the preferred
 boundary for untrusted commands.
 
+Optional agent extensions are initialized before the listener becomes ready:
+
+- `skills.enabled` scans strict `SKILL.md` packages and creates a read-only
+  projection for sandboxed commands. Agents discover instructions through
+  `describe_skill` and load them through `read_skill` only when relevant.
+- `mcp.enabled` connects every configured stdio or Streamable HTTP server and
+  atomically registers its namespaced tools. Startup fails if discovery is
+  unsafe or incomplete.
+- `memory.enabled` provides user-and-thread-scoped recall plus explicit search,
+  upsert, and delete tools. Authenticated runs use the bearer principal as the
+  user boundary; local unauthenticated runs use the `local` scope.
+- The runtime estimates prompt size before every model turn and uses the active
+  model to summarize older, tool-safe message groups when the configured
+  context budget is exceeded.
+
 Create a thread and launch a run:
 
 ```sh

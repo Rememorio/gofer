@@ -156,11 +156,20 @@ func TestDescribeToolAndRendering(t *testing.T) {
 	if err := registry.Register(catalog.DescribeTool()); err != nil {
 		t.Fatalf("Register(): %v", err)
 	}
+	if err := registry.Register(catalog.ReadTool()); err != nil {
+		t.Fatalf("Register(read): %v", err)
+	}
 	result, err := registry.Execute(context.Background(), domain.ToolCall{
 		ID: "1", Name: "describe_skill", Arguments: json.RawMessage(`{"name":"chart"}`),
 	})
 	if err != nil || result.IsError || !strings.Contains(string(result.Output), "/mnt/skills/public/chart/SKILL.md") {
 		t.Fatalf("Execute() = %#v, %v", result, err)
+	}
+	read, err := registry.Execute(context.Background(), domain.ToolCall{
+		ID: "2", Name: "read_skill", Arguments: json.RawMessage(`{"name":"chart"}`),
+	})
+	if err != nil || read.IsError || !strings.Contains(string(read.Output), "# Instructions") {
+		t.Fatalf("ReadTool() = %#v, %v", read, err)
 	}
 	rendered := RenderDescription(catalog.List(true))
 	if !strings.Contains(rendered, "Create charts &amp; dashboards") || !strings.Contains(rendered, "read_file") {

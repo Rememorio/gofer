@@ -97,6 +97,10 @@ func TestValidateRejectsInvalidConfigurations(t *testing.T) {
 		{name: "log level", mutate: func(config *Config) { config.LogLevel = "trace" }},
 		{name: "address", mutate: func(config *Config) { config.Server.Address = "bad" }},
 		{name: "runtime", mutate: func(config *Config) { config.Runtime.MaxTurns = 0 }},
+		{name: "runtime context", mutate: func(config *Config) { config.Runtime.MaxContextTokens = 0 }},
+		{name: "runtime reserve", mutate: func(config *Config) { config.Runtime.ReserveTokens = config.Runtime.MaxContextTokens }},
+		{name: "runtime recent", mutate: func(config *Config) { config.Runtime.MinRecentMessages = 0 }},
+		{name: "runtime summary", mutate: func(config *Config) { config.Runtime.MaxSummaryChars = 0 }},
 		{name: "storage driver", mutate: func(config *Config) { config.Storage.Driver = "bad" }},
 		{name: "storage DSN", mutate: func(config *Config) { config.Storage.DSN = "" }},
 		{name: "workspace root", mutate: func(config *Config) { config.Workspace.Root = "" }},
@@ -127,6 +131,20 @@ func TestValidateRejectsInvalidConfigurations(t *testing.T) {
 		{name: "browser viewport height high", mutate: func(config *Config) { config.Browser.ViewportHeight = 4321 }},
 		{name: "browser executable NUL", mutate: func(config *Config) { config.Browser.ExecutablePath = "chrome\x00" }},
 		{name: "browser remote NUL", mutate: func(config *Config) { config.Browser.RemoteURL = "ws://chrome\x00" }},
+		{name: "skill size", mutate: func(config *Config) { config.Skills.MaxPackageBytes = 0 }},
+		{name: "skill enabled root", mutate: func(config *Config) { config.Skills.Enabled, config.Skills.Root = true, "" }},
+		{name: "MCP missing servers", mutate: func(config *Config) { config.MCP.Enabled = true }},
+		{name: "MCP bad transport", mutate: func(config *Config) { config.MCP.Servers = []MCPServerConfig{{Name: "x", Transport: "bad"}} }},
+		{name: "MCP missing command", mutate: func(config *Config) { config.MCP.Servers = []MCPServerConfig{{Name: "x", Transport: "stdio"}} }},
+		{name: "MCP missing URL", mutate: func(config *Config) {
+			config.MCP.Servers = []MCPServerConfig{{Name: "x", Transport: "streamable_http"}}
+		}},
+		{name: "MCP duplicate", mutate: func(config *Config) {
+			server := MCPServerConfig{Name: "x", Transport: "stdio", Command: "x"}
+			config.MCP.Servers = []MCPServerConfig{server, server}
+		}},
+		{name: "memory limit", mutate: func(config *Config) { config.Memory.Limit = 0 }},
+		{name: "memory chars", mutate: func(config *Config) { config.Memory.MaxChars = 127 }},
 		{name: "auth missing tokens", mutate: func(config *Config) { config.Auth.Enabled = true }},
 		{name: "auth short secret", mutate: func(config *Config) {
 			config.Auth = AuthConfig{Enabled: true, Tokens: []AuthTokenConfig{{Secret: "short", PrincipalID: "u", Permissions: []string{"admin"}}}}

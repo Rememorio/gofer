@@ -32,6 +32,9 @@ type Config struct {
 	Workspace WorkspaceConfig `yaml:"workspace" json:"workspace"`
 	Sandbox   SandboxConfig   `yaml:"sandbox" json:"sandbox"`
 	Browser   BrowserConfig   `yaml:"browser" json:"browser"`
+	Skills    SkillsConfig    `yaml:"skills" json:"skills"`
+	MCP       MCPConfig       `yaml:"mcp" json:"mcp"`
+	Memory    MemoryConfig    `yaml:"memory" json:"memory"`
 	Auth      AuthConfig      `yaml:"auth" json:"auth"`
 	Scheduler SchedulerConfig `yaml:"scheduler" json:"scheduler"`
 	Channels  ChannelsConfig  `yaml:"channels" json:"channels"`
@@ -45,10 +48,14 @@ type ServerConfig struct {
 
 // RuntimeConfig controls bounded agent execution.
 type RuntimeConfig struct {
-	MaxTurns         int `yaml:"max_turns" json:"max_turns"`
-	MaxParallelTools int `yaml:"max_parallel_tools" json:"max_parallel_tools"`
-	MaxSubagents     int `yaml:"max_subagents" json:"max_subagents"`
-	EventBuffer      int `yaml:"event_buffer" json:"event_buffer"`
+	MaxTurns          int `yaml:"max_turns" json:"max_turns"`
+	MaxParallelTools  int `yaml:"max_parallel_tools" json:"max_parallel_tools"`
+	MaxSubagents      int `yaml:"max_subagents" json:"max_subagents"`
+	EventBuffer       int `yaml:"event_buffer" json:"event_buffer"`
+	MaxContextTokens  int `yaml:"max_context_tokens" json:"max_context_tokens"`
+	ReserveTokens     int `yaml:"reserve_tokens" json:"reserve_tokens"`
+	MinRecentMessages int `yaml:"min_recent_messages" json:"min_recent_messages"`
+	MaxSummaryChars   int `yaml:"max_summary_chars" json:"max_summary_chars"`
 }
 
 // StorageConfig selects the durable state adapter.
@@ -93,6 +100,43 @@ type BrowserConfig struct {
 	ActionTimeoutSeconds  int    `yaml:"action_timeout_seconds" json:"action_timeout_seconds"`
 	ViewportWidth         int    `yaml:"viewport_width" json:"viewport_width"`
 	ViewportHeight        int    `yaml:"viewport_height" json:"viewport_height"`
+}
+
+// SkillsConfig controls local progressive-disclosure skill packages.
+type SkillsConfig struct {
+	Enabled          bool   `yaml:"enabled" json:"enabled"`
+	Root             string `yaml:"root" json:"root,omitempty"`
+	ProjectionRoot   string `yaml:"projection_root" json:"projection_root,omitempty"`
+	MaxDocumentBytes int64  `yaml:"max_document_bytes" json:"max_document_bytes"`
+	MaxPackageBytes  int64  `yaml:"max_package_bytes" json:"max_package_bytes"`
+}
+
+// MCPConfig controls trusted external Model Context Protocol servers.
+type MCPConfig struct {
+	Enabled bool              `yaml:"enabled" json:"enabled"`
+	Servers []MCPServerConfig `yaml:"servers" json:"servers"`
+}
+
+// MCPServerConfig configures one stdio or Streamable HTTP MCP endpoint.
+type MCPServerConfig struct {
+	Name                 string            `yaml:"name" json:"name"`
+	Transport            string            `yaml:"transport" json:"transport"`
+	Command              string            `yaml:"command" json:"command,omitempty"`
+	Arguments            []string          `yaml:"arguments" json:"arguments,omitempty"`
+	Environment          map[string]string `yaml:"environment" json:"-"`
+	WorkingDirectory     string            `yaml:"working_directory" json:"working_directory,omitempty"`
+	URL                  string            `yaml:"url" json:"url,omitempty"`
+	Headers              map[string]string `yaml:"headers" json:"-"`
+	AllowInsecureHTTP    bool              `yaml:"allow_insecure_http" json:"allow_insecure_http"`
+	DisableStandaloneSSE bool              `yaml:"disable_standalone_sse" json:"disable_standalone_sse"`
+	MaxRetries           int               `yaml:"max_retries" json:"max_retries"`
+}
+
+// MemoryConfig controls scoped memory recall and agent memory tools.
+type MemoryConfig struct {
+	Enabled  bool `yaml:"enabled" json:"enabled"`
+	Limit    int  `yaml:"limit" json:"limit"`
+	MaxChars int  `yaml:"max_chars" json:"max_chars"`
 }
 
 // AuthConfig controls optional bearer authentication at the HTTP boundary.
@@ -154,10 +198,14 @@ func Defaults() Config {
 		LogLevel: "info",
 		Server:   ServerConfig{Address: "127.0.0.1:8001"},
 		Runtime: RuntimeConfig{
-			MaxTurns:         100,
-			MaxParallelTools: 8,
-			MaxSubagents:     8,
-			EventBuffer:      128,
+			MaxTurns:          100,
+			MaxParallelTools:  8,
+			MaxSubagents:      8,
+			EventBuffer:       128,
+			MaxContextTokens:  120_000,
+			ReserveTokens:     8_000,
+			MinRecentMessages: 8,
+			MaxSummaryChars:   20_000,
 		},
 		Storage: StorageConfig{Driver: "sqlite", DSN: ".gofer/gofer.db"},
 		Workspace: WorkspaceConfig{
@@ -173,6 +221,9 @@ func Defaults() Config {
 			MaxSessions: 32, IdleTimeoutSeconds: 1800, ActionTimeoutSeconds: 30,
 			ViewportWidth: 1280, ViewportHeight: 720,
 		},
+		Skills:    SkillsConfig{Root: "skills", ProjectionRoot: ".gofer/skills", MaxDocumentBytes: 1 << 20, MaxPackageBytes: 10 << 20},
+		MCP:       MCPConfig{},
+		Memory:    MemoryConfig{Enabled: true, Limit: 5, MaxChars: 8 << 10},
 		Auth:      AuthConfig{},
 		Scheduler: SchedulerConfig{PollIntervalSeconds: 5, LeaseDurationSeconds: 300, BatchSize: 32},
 		Channels:  ChannelsConfig{MaxInflight: 32, DedupeTTLSeconds: 86400},
@@ -241,6 +292,9 @@ func (config Config) Validate() error {
 	if err := validateBrowser(config.Browser); err != nil {
 		return err
 	}
+	if err := validateAgentExtensions(config.Skills, config.MCP, config.Memory); err != nil {
+		return err
+	}
 	if err := validateServices(config.Auth, config.Scheduler, config.Channels); err != nil {
 		return err
 	}
@@ -281,7 +335,10 @@ func (config Config) validateCore() error {
 		return fmt.Errorf("%w: server.address: %w", ErrInvalid, err)
 	}
 	if config.Runtime.MaxTurns <= 0 || config.Runtime.MaxParallelTools <= 0 ||
-		config.Runtime.MaxSubagents <= 0 || config.Runtime.EventBuffer <= 0 {
+		config.Runtime.MaxSubagents <= 0 || config.Runtime.EventBuffer <= 0 ||
+		config.Runtime.MaxContextTokens <= 0 || config.Runtime.ReserveTokens < 0 ||
+		config.Runtime.ReserveTokens >= config.Runtime.MaxContextTokens ||
+		config.Runtime.MinRecentMessages <= 0 || config.Runtime.MaxSummaryChars <= 0 {
 		return fmt.Errorf("%w: runtime limits must be positive", ErrInvalid)
 	}
 	if !oneOf(config.Storage.Driver, "memory", "sqlite", "postgres") {
@@ -293,6 +350,36 @@ func (config Config) validateCore() error {
 	if strings.TrimSpace(config.Workspace.Root) == "" || config.Workspace.MaxReadBytes <= 0 ||
 		config.Workspace.MaxWriteBytes <= 0 || config.Workspace.MaxUploadBytes <= 0 {
 		return fmt.Errorf("%w: workspace root and size limits are required", ErrInvalid)
+	}
+	return nil
+}
+
+func validateAgentExtensions(skills SkillsConfig, mcp MCPConfig, memory MemoryConfig) error {
+	if skills.MaxDocumentBytes <= 0 || skills.MaxPackageBytes <= 0 ||
+		(skills.Enabled && (strings.TrimSpace(skills.Root) == "" || strings.TrimSpace(skills.ProjectionRoot) == "")) {
+		return fmt.Errorf("%w: invalid skills configuration", ErrInvalid)
+	}
+	if mcp.Enabled && len(mcp.Servers) == 0 {
+		return fmt.Errorf("%w: MCP servers are required when enabled", ErrInvalid)
+	}
+	names := make(map[string]struct{}, len(mcp.Servers))
+	for _, server := range mcp.Servers {
+		if strings.TrimSpace(server.Name) == "" || !oneOf(server.Transport, "stdio", "streamable_http") || server.MaxRetries < 0 {
+			return fmt.Errorf("%w: invalid MCP server", ErrInvalid)
+		}
+		if server.Transport == "stdio" && strings.TrimSpace(server.Command) == "" {
+			return fmt.Errorf("%w: MCP stdio command is required", ErrInvalid)
+		}
+		if server.Transport == "streamable_http" && strings.TrimSpace(server.URL) == "" {
+			return fmt.Errorf("%w: MCP HTTP URL is required", ErrInvalid)
+		}
+		if _, exists := names[server.Name]; exists {
+			return fmt.Errorf("%w: duplicate MCP server", ErrInvalid)
+		}
+		names[server.Name] = struct{}{}
+	}
+	if memory.Limit < 1 || memory.Limit > 100 || memory.MaxChars < 128 {
+		return fmt.Errorf("%w: invalid memory limits", ErrInvalid)
 	}
 	return nil
 }

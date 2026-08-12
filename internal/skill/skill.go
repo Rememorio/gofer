@@ -368,7 +368,7 @@ func (catalog *Catalog) IndexPrompt() string {
 Use skills for optimized task-specific workflows.
 1. Check <skill_index> for a matching name.
 2. Call describe_skill to inspect its metadata and location.
-3. Read the returned SKILL.md only when relevant, then follow it precisely.
+3. Call read_skill only when relevant, then follow the returned SKILL.md precisely.
 <skill_index>
 %s
 </skill_index>

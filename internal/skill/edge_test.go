@@ -121,6 +121,31 @@ func TestEmptyCatalogAndProjectionValidation(t *testing.T) {
 	}
 }
 
+func TestRemoveProjection(t *testing.T) {
+	t.Parallel()
+	catalog := mustCatalog(t, Config{Root: t.TempDir()})
+	destination := filepath.Join(t.TempDir(), "projection")
+	if err := catalog.Project(context.Background(), destination); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.RemoveProjection(destination); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(destination); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if err := catalog.RemoveProjection(destination); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.RemoveProjection(string(filepath.Separator)); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("RemoveProjection(root) error = %v", err)
+	}
+	var nilCatalog *Catalog
+	if err := nilCatalog.RemoveProjection(destination); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("nil RemoveProjection() error = %v", err)
+	}
+}
+
 func setupCategoryRootSkill(t *testing.T, root string) Config {
 	t.Helper()
 	directory := filepath.Join(root, string(CategoryPublic))

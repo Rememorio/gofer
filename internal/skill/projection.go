@@ -56,6 +56,22 @@ func (catalog *Catalog) Project(ctx context.Context, destination string) error {
 	return nil
 }
 
+// RemoveProjection removes a generated projection after restoring directory
+// permissions. Source skill packages are never accepted as a destination.
+func (catalog *Catalog) RemoveProjection(destination string) error {
+	if catalog == nil {
+		return fmt.Errorf("%w: catalog is nil", ErrInvalidConfig)
+	}
+	absolute, err := filepath.Abs(destination)
+	if err != nil {
+		return fmt.Errorf("resolve skill projection: %w", err)
+	}
+	if absolute == filepath.VolumeName(absolute)+string(filepath.Separator) || absolute == catalog.root {
+		return fmt.Errorf("%w: unsafe projection destination", ErrInvalidConfig)
+	}
+	return removeProjectedDirectory(absolute)
+}
+
 func (catalog *Catalog) enabledRecords() []record {
 	catalog.mu.RLock()
 	records := make([]record, 0, len(catalog.records))
