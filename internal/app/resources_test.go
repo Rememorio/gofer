@@ -126,7 +126,7 @@ func TestUploadAndArtifactHTTPWorkflow(t *testing.T) {
 	defer server.Close()
 	threadID := createThread(t, server.URL, "")
 	limits := resourceRequest[map[string]int64](t, server.URL, http.MethodGet, "/api/threads/"+string(threadID)+"/uploads/limits", nil, "", http.StatusOK)
-	if limits["max_file_size"] == 0 || limits["max_files"] != maxUploadFiles {
+	if limits["max_file_size"] == 0 || limits["max_files"] != int64(config.Defaults().Uploads.MaxFiles) {
 		t.Fatalf("limits = %#v", limits)
 	}
 
@@ -185,6 +185,75 @@ func TestUploadAndArtifactHTTPWorkflow(t *testing.T) {
 	resourceRequest[map[string]string](t, server.URL, http.MethodGet, "/api/threads/"+string(threadID)+"/artifacts/etc/passwd", nil, "", http.StatusBadRequest)
 }
 
+func TestDocumentUploadConversionHTTPWorkflow(t *testing.T) {
+	modelServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer modelServer.Close()
+	cfg := testConfig(t, modelServer.URL+"/v1")
+	cfg.Uploads.AutoConvertDocuments = true
+	cfg.Uploads.ConverterCommand = []string{os.Args[0], "-test.run=TestDocumentConverterHelper", "--", "convert", "{input}"}
+	service, err := New(context.Background(), cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = service.Close() }()
+	server := httptest.NewServer(service.Handler())
+	defer server.Close()
+	threadID := createThread(t, server.URL, "")
+
+	var body bytes.Buffer
+	form := multipart.NewWriter(&body)
+	part, err := form.CreateFormFile("files", "report.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.WriteString(part, "document bytes")
+	_ = form.Close()
+	request, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL+"/api/threads/"+string(threadID)+"/uploads", &body)
+	request.Header.Set("Content-Type", form.FormDataContentType())
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var uploaded struct {
+		Files []uploadResource `json:"files"`
+	}
+	if err = json.NewDecoder(response.Body).Decode(&uploaded); err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK || len(uploaded.Files) != 1 ||
+		uploaded.Files[0].MarkdownVirtualPath != workspace.UploadConversionsRoot+"/report.pdf.md" || uploaded.Files[0].MarkdownArtifactURL == "" {
+		t.Fatalf("converted upload = %d %#v", response.StatusCode, uploaded)
+	}
+	markdown := resourceRawRequest(t, server.URL, http.MethodGet, uploaded.Files[0].MarkdownArtifactURL, nil, "", http.StatusOK)
+	converted, _ := io.ReadAll(markdown.Body)
+	_ = markdown.Body.Close()
+	if string(converted) != "# Converted\ndocument bytes" {
+		t.Fatalf("converted content = %q", converted)
+	}
+	listed := resourceRequest[struct {
+		Files []uploadResource `json:"files"`
+	}](t, server.URL, http.MethodGet, "/api/threads/"+string(threadID)+"/uploads/list", nil, "", http.StatusOK)
+	if len(listed.Files) != 1 || listed.Files[0].MarkdownVirtualPath != uploaded.Files[0].MarkdownVirtualPath {
+		t.Fatalf("listed conversion = %#v", listed)
+	}
+	resourceRequest[map[string]bool](t, server.URL, http.MethodDelete, "/api/threads/"+string(threadID)+"/uploads/report.pdf", nil, "", http.StatusOK)
+	resourceRawRequest(t, server.URL, http.MethodGet, uploaded.Files[0].MarkdownArtifactURL, nil, "", http.StatusNotFound)
+}
+
+func TestDocumentConverterHelper(t *testing.T) {
+	if len(os.Args) < 3 || os.Args[len(os.Args)-3] != "--" || os.Args[len(os.Args)-2] != "convert" {
+		return
+	}
+	input := os.Args[len(os.Args)-1]
+	data, err := os.ReadFile(input)
+	if err != nil {
+		os.Exit(2)
+	}
+	_, _ = os.Stdout.Write(append([]byte("# Converted\n"), data...))
+	os.Exit(0)
+}
+
 func exerciseOutputArtifact(t *testing.T, service *Service, baseURL string, threadID domain.ThreadID) {
 	t.Helper()
 	threadWorkspace, err := service.workspaces.Open(threadID)
@@ -235,7 +304,7 @@ func TestResourceAPIErrorsAndDisabledSkills(t *testing.T) {
 	if !activeContent("text/html; charset=utf-8") || activeContent("text/plain") {
 		t.Fatal("active content classification")
 	}
-	if uploadRequestLimit(1) != int64(1<<20)+maxUploadFiles || uploadRequestLimit(int64(^uint64(0)>>1)) != int64(^uint64(0)>>1) {
+	if uploadRequestLimit(1) != int64(1<<20)+1 || uploadRequestLimit(int64(^uint64(0)>>1)) != int64(^uint64(0)>>1) {
 		t.Fatal("upload request limit")
 	}
 }
@@ -263,12 +332,30 @@ func TestReceiveUploadsIsAtomicAndBounded(t *testing.T) {
 	}
 	_ = form.Close()
 	reader := multipart.NewReader(bytes.NewReader(body.Bytes()), form.Boundary())
-	if _, err = receiveUploads(threadWorkspace, reader, 1); !errors.Is(err, workspace.ErrTooLarge) {
+	if _, err = receiveUploads(threadWorkspace, reader, 1, 1024); !errors.Is(err, workspace.ErrTooLarge) {
 		t.Fatalf("receiveUploads() = %v", err)
 	}
 	listed, err := threadWorkspace.List(workspace.UploadsRoot, workspace.ListOptions{MaxDepth: 1})
 	if err != nil || len(listed.Entries) != 0 {
 		t.Fatalf("partial uploads remain = %#v, %v", listed, err)
+	}
+	body.Reset()
+	form = multipart.NewWriter(&body)
+	for _, name := range []string{"three.txt", "four.txt"} {
+		part, createErr := form.CreateFormFile("files", name)
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		_, _ = io.WriteString(part, "four")
+	}
+	_ = form.Close()
+	reader = multipart.NewReader(bytes.NewReader(body.Bytes()), form.Boundary())
+	if _, err = receiveUploads(threadWorkspace, reader, 2, 7); !errors.Is(err, workspace.ErrTooLarge) {
+		t.Fatalf("receiveUploads(total) = %v", err)
+	}
+	listed, err = threadWorkspace.List(workspace.UploadsRoot, workspace.ListOptions{MaxDepth: 1})
+	if err != nil || len(listed.Entries) != 0 {
+		t.Fatalf("partial total uploads remain = %#v, %v", listed, err)
 	}
 }
 

@@ -19,10 +19,9 @@ import (
 	"github.com/Rememorio/gofer/internal/domain"
 	"github.com/Rememorio/gofer/internal/skill"
 	"github.com/Rememorio/gofer/internal/store"
+	"github.com/Rememorio/gofer/internal/uploads"
 	"github.com/Rememorio/gofer/internal/workspace"
 )
-
-const maxUploadFiles = 20
 
 func (service *Service) resourceRoutes(mux *http.ServeMux) {
 	service.assistantRoutes(mux)
@@ -94,6 +93,8 @@ func (service *Service) listFeatures(writer http.ResponseWriter, _ *http.Request
 		"automatic_title":      map[string]bool{"enabled": service.config.Title.Enabled},
 		"suggestions":          map[string]bool{"enabled": service.config.Suggestions.Enabled},
 		"input_polish":         map[string]bool{"enabled": service.config.InputPolish.Enabled},
+		"file_uploads":         map[string]bool{"enabled": true},
+		"document_conversion":  map[string]bool{"enabled": service.config.Uploads.AutoConvertDocuments},
 		"skills":               map[string]bool{"enabled": service.skills != nil},
 		"memory":               map[string]bool{"enabled": service.memories != nil},
 		"scheduler":            map[string]bool{"enabled": service.config.Scheduler.Enabled},
@@ -191,33 +192,54 @@ func (service *Service) uploadFiles(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	defer func() { _ = threadWorkspace.Close() }()
-	request.Body = http.MaxBytesReader(writer, request.Body, uploadRequestLimit(service.config.Workspace.MaxUploadBytes))
+	request.Body = http.MaxBytesReader(writer, request.Body, uploadRequestLimit(service.config.Uploads.MaxTotalBytes))
 	reader, err := request.MultipartReader()
 	if err != nil {
 		writeResourceError(writer, errors.Join(workspace.ErrInvalidPath, err))
 		return
 	}
-	files, err := receiveUploads(threadWorkspace, reader, maxUploadFiles)
+	files, err := receiveUploads(threadWorkspace, reader, service.config.Uploads.MaxFiles, service.config.Uploads.MaxTotalBytes)
 	if err != nil {
 		writeResourceError(writer, err)
 		return
 	}
 	for index := range files {
+		entry, inspectErr := threadWorkspace.Inspect(files[index].VirtualPath)
+		if inspectErr == nil {
+			var companion *workspace.Entry
+			companion, inspectErr = service.uploads.Process(request.Context(), threadWorkspace, entry)
+			if companion != nil {
+				files[index].MarkdownFile = companion.Name
+				files[index].MarkdownPath = companion.Path
+				files[index].MarkdownVirtualPath = companion.Path
+				files[index].MarkdownArtifactURL = artifactURL(thread.ID, companion.Path)
+			}
+		}
+		if inspectErr != nil {
+			service.logger.Warn("document conversion skipped", "thread_id", thread.ID, "filename", files[index].Filename, "error", inspectErr)
+		}
 		files[index].ArtifactURL = artifactURL(thread.ID, files[index].VirtualPath)
 	}
-	writeResourceJSON(writer, http.StatusOK, map[string]any{"success": true, "files": files, "message": "files uploaded"})
+	writeResourceJSON(writer, http.StatusOK, map[string]any{"success": true, "files": files, "message": "files uploaded", "skipped_files": []string{}})
 }
 
 type uploadResource struct {
-	Filename    string    `json:"filename"`
-	Size        int64     `json:"size"`
-	VirtualPath string    `json:"virtual_path"`
-	ArtifactURL string    `json:"artifact_url"`
-	ModifiedAt  time.Time `json:"modified_at,omitempty"`
+	Filename            string    `json:"filename"`
+	Size                int64     `json:"size"`
+	Path                string    `json:"path"`
+	VirtualPath         string    `json:"virtual_path"`
+	ArtifactURL         string    `json:"artifact_url"`
+	Extension           string    `json:"extension,omitempty"`
+	ModifiedAt          time.Time `json:"modified_at,omitempty"`
+	MarkdownFile        string    `json:"markdown_file,omitempty"`
+	MarkdownPath        string    `json:"markdown_path,omitempty"`
+	MarkdownVirtualPath string    `json:"markdown_virtual_path,omitempty"`
+	MarkdownArtifactURL string    `json:"markdown_artifact_url,omitempty"`
 }
 
-func receiveUploads(threadWorkspace *workspace.Thread, reader *multipart.Reader, limit int) ([]uploadResource, error) {
+func receiveUploads(threadWorkspace *workspace.Thread, reader *multipart.Reader, fileLimit int, totalLimit int64) ([]uploadResource, error) {
 	files := make([]uploadResource, 0)
+	var totalSize int64
 	cleanup := func() {
 		for _, file := range files {
 			_ = threadWorkspace.RemoveUpload(file.Filename)
@@ -230,13 +252,13 @@ func receiveUploads(threadWorkspace *workspace.Thread, reader *multipart.Reader,
 		}
 		if err != nil {
 			cleanup()
-			return nil, err
+			return nil, normalizeUploadError(err)
 		}
 		if part.FileName() == "" {
 			_ = part.Close()
 			continue
 		}
-		if len(files) >= limit {
+		if len(files) >= fileLimit {
 			_ = part.Close()
 			cleanup()
 			return nil, workspace.ErrTooLarge
@@ -244,10 +266,22 @@ func receiveUploads(threadWorkspace *workspace.Thread, reader *multipart.Reader,
 		entry, putErr := threadWorkspace.PutUpload(part.FileName(), part)
 		closeErr := part.Close()
 		if putErr != nil || closeErr != nil {
+			if putErr == nil {
+				_ = threadWorkspace.RemoveUpload(entry.Name)
+			}
 			cleanup()
-			return nil, errors.Join(putErr, closeErr)
+			return nil, normalizeUploadError(errors.Join(putErr, closeErr))
 		}
-		files = append(files, uploadResource{Filename: entry.Name, Size: entry.Size, VirtualPath: entry.Path, ModifiedAt: entry.ModifiedAt})
+		totalSize += entry.Size
+		if totalSize > totalLimit {
+			_ = threadWorkspace.RemoveUpload(entry.Name)
+			cleanup()
+			return nil, workspace.ErrTooLarge
+		}
+		files = append(files, uploadResource{
+			Filename: entry.Name, Size: entry.Size, Path: entry.Path, VirtualPath: entry.Path,
+			Extension: strings.ToLower(path.Ext(entry.Name)), ModifiedAt: entry.ModifiedAt,
+		})
 	}
 	if len(files) == 0 {
 		return nil, workspace.ErrInvalidPath
@@ -255,13 +289,21 @@ func receiveUploads(threadWorkspace *workspace.Thread, reader *multipart.Reader,
 	return files, nil
 }
 
-func uploadRequestLimit(maxFileBytes int64) int64 {
+func normalizeUploadError(err error) error {
+	var maximum *http.MaxBytesError
+	if errors.As(err, &maximum) {
+		return errors.Join(workspace.ErrTooLarge, err)
+	}
+	return err
+}
+
+func uploadRequestLimit(maxTotalBytes int64) int64 {
 	const overhead = int64(1 << 20)
 	const maxInt64 = int64(^uint64(0) >> 1)
-	if maxFileBytes > (maxInt64-overhead)/maxUploadFiles {
+	if maxTotalBytes > maxInt64-overhead {
 		return maxInt64
 	}
-	return maxFileBytes*maxUploadFiles + overhead
+	return maxTotalBytes + overhead
 }
 
 func (service *Service) uploadLimits(writer http.ResponseWriter, request *http.Request) {
@@ -271,7 +313,11 @@ func (service *Service) uploadLimits(writer http.ResponseWriter, request *http.R
 		return
 	}
 	_ = threadWorkspace.Close()
-	writeResourceJSON(writer, http.StatusOK, map[string]any{"max_file_size": service.config.Workspace.MaxUploadBytes, "max_files": maxUploadFiles, "max_total_size": service.config.Workspace.MaxUploadBytes * maxUploadFiles})
+	writeResourceJSON(writer, http.StatusOK, map[string]any{
+		"max_file_size":  service.config.Workspace.MaxUploadBytes,
+		"max_files":      service.config.Uploads.MaxFiles,
+		"max_total_size": service.config.Uploads.MaxTotalBytes,
+	})
 }
 
 func (service *Service) listUploads(writer http.ResponseWriter, request *http.Request) {
@@ -281,18 +327,24 @@ func (service *Service) listUploads(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	defer func() { _ = threadWorkspace.Close() }()
-	listed, err := threadWorkspace.List(workspace.UploadsRoot, workspace.ListOptions{MaxDepth: 1, MaxResults: 1000})
+	listed, err := service.uploads.List(threadWorkspace, uploads.ListOptions{MaxResults: 100})
 	if err != nil {
 		writeResourceError(writer, err)
 		return
 	}
-	files := make([]uploadResource, 0, len(listed.Entries))
-	for _, entry := range listed.Entries {
-		if !entry.Directory {
-			files = append(files, uploadResource{Filename: entry.Name, Size: entry.Size, VirtualPath: entry.Path, ArtifactURL: artifactURL(thread.ID, entry.Path), ModifiedAt: entry.ModifiedAt})
+	files := make([]uploadResource, 0, len(listed.Files))
+	for _, file := range listed.Files {
+		resource := uploadResource{
+			Filename: file.Filename, Size: file.Size, Path: file.Path, VirtualPath: file.VirtualPath,
+			ArtifactURL: artifactURL(thread.ID, file.VirtualPath), Extension: file.Extension, ModifiedAt: file.ModifiedAt,
+			MarkdownFile: file.MarkdownFile, MarkdownPath: file.MarkdownPath, MarkdownVirtualPath: file.MarkdownVirtualPath,
 		}
+		if resource.MarkdownVirtualPath != "" {
+			resource.MarkdownArtifactURL = artifactURL(thread.ID, resource.MarkdownVirtualPath)
+		}
+		files = append(files, resource)
 	}
-	writeResourceJSON(writer, http.StatusOK, map[string]any{"files": files, "count": len(files), "truncated": listed.Truncated})
+	writeResourceJSON(writer, http.StatusOK, map[string]any{"files": files, "count": listed.TotalCount, "truncated": listed.Truncated})
 }
 
 func (service *Service) deleteUpload(writer http.ResponseWriter, request *http.Request) {
@@ -404,7 +456,7 @@ func writeResourceError(writer http.ResponseWriter, err error) {
 		status = http.StatusNotFound
 	case errors.Is(err, workspace.ErrTooLarge):
 		status = http.StatusRequestEntityTooLarge
-	case errors.Is(err, domain.ErrInvalidID), errors.Is(err, workspace.ErrInvalidPath), errors.Is(err, workspace.ErrNotRegular), errors.Is(err, artifact.ErrInvalidArtifact):
+	case errors.Is(err, domain.ErrInvalidID), errors.Is(err, workspace.ErrInvalidPath), errors.Is(err, workspace.ErrNotRegular), errors.Is(err, artifact.ErrInvalidArtifact), errors.Is(err, uploads.ErrInvalidConfig):
 		status = http.StatusBadRequest
 	case errors.Is(err, store.ErrInvalidQuery):
 		status = http.StatusBadRequest

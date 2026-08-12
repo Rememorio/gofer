@@ -11,6 +11,7 @@ import (
 
 	"github.com/Rememorio/gofer/internal/domain"
 	"github.com/Rememorio/gofer/internal/gateway"
+	"github.com/Rememorio/gofer/internal/uploads"
 )
 
 type runSettings struct {
@@ -18,6 +19,7 @@ type runSettings struct {
 	system      string
 	maxTokens   int
 	temperature *float64
+	uploads     []uploads.Reference
 }
 
 type wireMessage struct {
@@ -26,6 +28,8 @@ type wireMessage struct {
 	Content    json.RawMessage `json:"content"`
 	ToolCallID string          `json:"tool_call_id"`
 	ToolCalls  []wireToolCall  `json:"tool_calls"`
+	Additional json.RawMessage `json:"additional_kwargs"`
+	Files      json.RawMessage `json:"files"`
 }
 
 type wireToolCall struct {
@@ -51,11 +55,62 @@ func decodeLaunch(request gateway.RunRequest, now time.Time) ([]domain.Message, 
 			return nil, runSettings{}, fmt.Errorf("invalid input message %d: %w", index, decodeErr)
 		}
 		messages = append(messages, message)
+		if message.Role == domain.RoleUser {
+			settings.uploads, decodeErr = decodeUploadReferences(raw)
+			if decodeErr != nil {
+				return nil, runSettings{}, fmt.Errorf("invalid input message %d uploads: %w", index, decodeErr)
+			}
+		}
 	}
 	if len(messages) == 0 {
 		return nil, runSettings{}, errors.New("invalid input: messages are required")
 	}
 	return messages, settings, nil
+}
+
+func decodeUploadReferences(raw json.RawMessage) ([]uploads.Reference, error) {
+	var message struct {
+		Additional json.RawMessage `json:"additional_kwargs"`
+		Files      json.RawMessage `json:"files"`
+	}
+	if err := json.Unmarshal(raw, &message); err != nil {
+		return nil, err
+	}
+	files := message.Files
+	if len(message.Additional) > 0 && !bytes.Equal(bytes.TrimSpace(message.Additional), []byte("null")) {
+		var additional struct {
+			Files json.RawMessage `json:"files"`
+		}
+		if err := json.Unmarshal(message.Additional, &additional); err != nil {
+			return nil, errors.New("additional_kwargs must be an object")
+		}
+		if len(additional.Files) > 0 {
+			files = additional.Files
+		}
+	}
+	if len(files) == 0 || bytes.Equal(bytes.TrimSpace(files), []byte("null")) {
+		return nil, nil
+	}
+	var values []struct {
+		Filename string `json:"filename"`
+		Size     int64  `json:"size"`
+	}
+	if err := json.Unmarshal(files, &values); err != nil {
+		return nil, errors.New("files must be an array")
+	}
+	if len(values) > 100 {
+		return nil, errors.New("files cannot contain more than 100 entries")
+	}
+	references := make([]uploads.Reference, 0, len(values))
+	for _, value := range values {
+		if value.Size < 0 {
+			return nil, errors.New("file size cannot be negative")
+		}
+		if value.Filename != "" {
+			references = append(references, uploads.Reference{Filename: value.Filename, Size: value.Size})
+		}
+	}
+	return references, nil
 }
 
 func decodeSettings(request gateway.RunRequest) (runSettings, error) {

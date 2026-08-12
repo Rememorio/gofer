@@ -424,6 +424,74 @@ func TestWorkspaceConcurrentUploadsAreCollisionFree(t *testing.T) {
 	}
 }
 
+func TestWorkspaceUploadConversionLifecycle(t *testing.T) {
+	t.Parallel()
+	thread := newTestWorkspace(t, Config{MaxUploadBytes: 16})
+	defer func() { _ = thread.Close() }()
+	source, err := thread.PutUpload("report.pdf", strings.NewReader("source"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	converted, err := thread.PutUploadConversion(source.Name, strings.NewReader("# first"))
+	if err != nil || converted.Path != UploadConversionsRoot+"/report.pdf.md" {
+		t.Fatalf("PutUploadConversion() = %#v, %v", converted, err)
+	}
+	if _, err = thread.PutUploadConversion(source.Name, strings.NewReader("# replaced")); err != nil {
+		t.Fatal(err)
+	}
+	entry, err := thread.UploadConversion(source.Name)
+	if err != nil || entry.Path != converted.Path {
+		t.Fatalf("UploadConversion() = %#v, %v", entry, err)
+	}
+	result, err := thread.ReadFile(entry.Path, ReadOptions{})
+	if err != nil || result.Content != "# replaced" {
+		t.Fatalf("converted content = %#v, %v", result, err)
+	}
+	if err = thread.RemoveUpload(source.Name); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = thread.UploadConversion(source.Name); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("derived file remained: %v", err)
+	}
+	longName := strings.Repeat("x", 251) + ".pdf"
+	longSource, err := thread.PutUpload(longName, strings.NewReader("source"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	longDuplicate, err := thread.PutUpload(longName, strings.NewReader("second"))
+	if err != nil || len([]byte(longDuplicate.Name)) > 255 || !strings.HasSuffix(longDuplicate.Name, "-1.pdf") {
+		t.Fatalf("long duplicate = %#v, %v", longDuplicate, err)
+	}
+	longConversion, err := thread.PutUploadConversion(longSource.Name, strings.NewReader("# text"))
+	if err != nil || len(longConversion.Name) != 67 || strings.Contains(longConversion.Name, longName) {
+		t.Fatalf("long conversion = %#v, %v", longConversion, err)
+	}
+}
+
+func TestWorkspaceUploadConversionRejectsInvalidInput(t *testing.T) {
+	t.Parallel()
+	thread := newTestWorkspace(t, Config{MaxUploadBytes: 4})
+	defer func() { _ = thread.Close() }()
+	for _, name := range []string{"", "../bad", "a/b", strings.Repeat("x", 256)} {
+		if _, err := thread.PutUploadConversion(name, strings.NewReader("x")); !errors.Is(err, ErrInvalidPath) {
+			t.Fatalf("PutUploadConversion(%q) error = %v", name, err)
+		}
+		if _, err := thread.UploadConversion(name); !errors.Is(err, ErrInvalidPath) {
+			t.Fatalf("UploadConversion(%q) error = %v", name, err)
+		}
+	}
+	if _, err := thread.PutUploadConversion("large.pdf", strings.NewReader("12345")); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("large conversion error = %v", err)
+	}
+	if _, err := thread.PutUploadConversion("missing.pdf", strings.NewReader("text")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("missing source conversion error = %v", err)
+	}
+	var nilThread *Thread
+	if _, err := nilThread.PutUploadConversion("x.pdf", strings.NewReader("x")); !errors.Is(err, ErrInvalidPath) {
+		t.Fatalf("nil conversion error = %v", err)
+	}
+}
+
 func TestWorkspaceListGlobAndGrep(t *testing.T) {
 	t.Parallel()
 

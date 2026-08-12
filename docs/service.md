@@ -286,10 +286,19 @@ GET    /api/threads/{thread_id}/artifacts
 GET    /api/threads/{thread_id}/artifacts/{virtual_path}
 ```
 
-Duplicate upload names are made collision-free. Artifact responses support
-HTTP ranges and force active HTML or SVG content to download with MIME
-sniffing disabled. With authentication enabled, these routes require
-`resources:read` or `resources:write` and remain scoped to the thread owner.
+Duplicate upload names are made collision-free. File count, individual file
+size, and aggregate batch size are independent limits. Optional Office/PDF
+conversion writes a protected Markdown companion and fails soft without losing
+the original. Clients can attach the returned filenames to a user message in
+`additional_kwargs.files`; Gofer verifies them on disk and temporarily supplies
+bounded outlines or previews to the model without persisting that context.
+The `list_uploaded_files` tool supports `include_outline` as either a boolean
+or a filename list for historical discovery. Artifact responses support HTTP
+ranges and force active HTML or SVG content to download with MIME sniffing
+disabled. With authentication enabled, these routes require `resources:read`
+or `resources:write` and remain scoped to the thread owner. See
+[Uploads and document ingestion](uploads.md) for conversion and trust-boundary
+details.
 
 Long-running goal state is shared by the HTTP API and the agent's control
 tools:

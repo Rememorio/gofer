@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Rememorio/gofer/internal/domain"
 )
@@ -29,6 +30,9 @@ const (
 	WorkspaceRoot = VirtualRoot + "/workspace"
 	// UploadsRoot contains user-provided files and is read-only to file tools.
 	UploadsRoot = VirtualRoot + "/uploads"
+	// UploadConversionsRoot contains service-generated, model-readable Markdown
+	// companions for uploaded documents. It remains read-only to file tools.
+	UploadConversionsRoot = UploadsRoot + "/.gofer-converted"
 	// OutputsRoot contains user-facing generated artifacts.
 	OutputsRoot = VirtualRoot + "/outputs"
 	// ProcessOutputDirectory is the default private directory for internal tool
@@ -590,13 +594,58 @@ func (workspace *Thread) PutUpload(filename string, reader io.Reader) (Entry, er
 	}
 }
 
+// PutUploadConversion atomically replaces the Markdown companion associated
+// with one uploaded source file. The derived path is deterministic and kept in
+// a dedicated directory so it can never overwrite a user upload with the same
+// stem.
+func (workspace *Thread) PutUploadConversion(filename string, reader io.Reader) (Entry, error) {
+	if workspace == nil || workspace.root == nil || !validFilename(filename) {
+		return Entry{}, fmt.Errorf("%w: unsafe upload filename", ErrInvalidPath)
+	}
+	data, err := readBounded(reader, workspace.maxUploadBytes)
+	if err != nil {
+		return Entry{}, err
+	}
+	source := "uploads/" + filename
+	relative := uploadConversionRelative(filename)
+	unlock := workspace.locks.lock("uploads")
+	defer unlock()
+	info, err := workspace.root.Stat(localName(source))
+	if err != nil {
+		return Entry{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return Entry{}, fmt.Errorf("%w: %s", ErrNotRegular, filename)
+	}
+	if err = workspace.writeAtomic(relative, data); err != nil {
+		return Entry{}, err
+	}
+	info, err = workspace.root.Stat(localName(source))
+	if err != nil || !info.Mode().IsRegular() {
+		_ = workspace.root.Remove(localName(relative))
+		if err != nil {
+			return Entry{}, err
+		}
+		return Entry{}, fmt.Errorf("%w: %s", ErrNotRegular, filename)
+	}
+	return workspace.Inspect(virtualize(relative))
+}
+
+// UploadConversion returns the Markdown companion associated with filename.
+func (workspace *Thread) UploadConversion(filename string) (Entry, error) {
+	if workspace == nil || workspace.root == nil || !validFilename(filename) {
+		return Entry{}, fmt.Errorf("%w: unsafe upload filename", ErrInvalidPath)
+	}
+	return workspace.Inspect(virtualize(uploadConversionRelative(filename)))
+}
+
 // RemoveUpload deletes one safe filename from the protected uploads directory.
 func (workspace *Thread) RemoveUpload(filename string) error {
 	if workspace == nil || workspace.root == nil || !validFilename(filename) {
 		return fmt.Errorf("%w: unsafe upload filename", ErrInvalidPath)
 	}
 	relative := "uploads/" + filename
-	unlock := workspace.locks.lock(relative)
+	unlock := workspace.locks.lock("uploads")
 	defer unlock()
 	info, err := workspace.root.Stat(localName(relative))
 	if err != nil {
@@ -605,7 +654,14 @@ func (workspace *Thread) RemoveUpload(filename string) error {
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("%w: %s", ErrNotRegular, filename)
 	}
-	return workspace.root.Remove(localName(relative))
+	if err = workspace.root.Remove(localName(relative)); err != nil {
+		return err
+	}
+	derived := uploadConversionRelative(filename)
+	if err = workspace.root.Remove(localName(derived)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // List returns paths below virtualPath up to configured bounds.
@@ -857,9 +913,33 @@ func uploadRelative(filename string, index int) string {
 	stem := strings.TrimSuffix(filename, extension)
 	candidate := filename
 	if index > 0 {
-		candidate = fmt.Sprintf("%s-%d%s", stem, index, extension)
+		suffix := fmt.Sprintf("-%d%s", index, extension)
+		if budget := 255 - len([]byte(suffix)); budget > 0 {
+			stem = truncateUTF8(stem, budget)
+			candidate = stem + suffix
+		} else {
+			digest := sha256.Sum256([]byte(filename))
+			candidate = fmt.Sprintf("%s-%d", hex.EncodeToString(digest[:]), index)
+		}
 	}
 	return path.Join("uploads", candidate)
+}
+
+func truncateUTF8(value string, maxBytes int) string {
+	for len(value) > maxBytes {
+		_, size := utf8.DecodeLastRuneInString(value)
+		value = value[:len(value)-size]
+	}
+	return value
+}
+
+func uploadConversionRelative(filename string) string {
+	derived := filename + ".md"
+	if len([]byte(derived)) > 255 {
+		digest := sha256.Sum256([]byte(filename))
+		derived = hex.EncodeToString(digest[:]) + ".md"
+	}
+	return path.Join("uploads", ".gofer-converted", derived)
 }
 
 func normalizeVirtualPath(value string) (string, error) {
@@ -1001,7 +1081,7 @@ func summarizeLine(line string) string {
 
 func validFilename(filename string) bool {
 	return filename != "" && filename != "." && filename != ".." && path.Base(filename) == filename &&
-		!strings.ContainsAny(filename, "\x00/\\")
+		len([]byte(filename)) <= 255 && !strings.ContainsAny(filename, "\x00/\\")
 }
 
 func randomSuffix() (string, error) {

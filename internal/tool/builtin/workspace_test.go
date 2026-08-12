@@ -57,6 +57,9 @@ func TestWorkspaceToolsListUploadsAndErrors(t *testing.T) {
 	if !containsJSON(listed, `input.csv`) {
 		t.Fatalf("list uploads = %s", listed)
 	}
+	if names := registry.UntrustedOutputTools(); len(names) != 1 || names[0] != "list_uploaded_files" {
+		t.Fatalf("untrusted tools = %#v", names)
+	}
 	tests := []struct {
 		name      string
 		arguments string
@@ -76,6 +79,9 @@ func TestWorkspaceToolsListUploadsAndErrors(t *testing.T) {
 	result := execute(t, registry, "write_file", `{"path":"/mnt/user-data/workspace/x","content":"x","unknown":true}`)
 	if !result.IsError {
 		t.Fatalf("unknown field result = %#v, want tool error", result)
+	}
+	if result = execute(t, registry, "list_uploaded_files", `{"include_outline":[""]}`); !result.IsError {
+		t.Fatalf("blank outline filename result = %#v", result)
 	}
 }
 

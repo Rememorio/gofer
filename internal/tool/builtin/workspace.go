@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/Rememorio/gofer/internal/artifact"
 	"github.com/Rememorio/gofer/internal/policy"
 	"github.com/Rememorio/gofer/internal/tool"
+	"github.com/Rememorio/gofer/internal/uploads"
 	"github.com/Rememorio/gofer/internal/workspace"
 )
 
@@ -19,6 +21,7 @@ import (
 type WorkspaceTools struct {
 	Workspace *workspace.Thread
 	Artifacts *artifact.Catalog
+	Uploads   *uploads.Manager
 	Now       func() time.Time
 }
 
@@ -204,13 +207,14 @@ func (tools WorkspaceTools) presentFilesTool() tool.Tool {
 }
 
 func (tools WorkspaceTools) listUploadsTool() tool.Tool {
-	return functionTool(
-		"list_uploaded_files", "List files uploaded to the current thread.",
-		`{"type":"object","properties":{"path":{"type":"string","const":"/mnt/user-data/uploads"},"max_results":{"type":"integer","minimum":1,"maximum":1000}},"additionalProperties":false}`,
+	function := functionTool(
+		"list_uploaded_files", "Discover uploaded files in the current thread, optionally with bounded document outlines.",
+		`{"type":"object","properties":{"path":{"type":"string","const":"/mnt/user-data/uploads"},"max_results":{"type":"integer","minimum":1,"maximum":100},"include_outline":{"oneOf":[{"type":"boolean"},{"type":"array","items":{"type":"string"},"maxItems":100,"uniqueItems":true}]}},"additionalProperties":false}`,
 		func(_ context.Context, arguments json.RawMessage) (any, error) {
 			var input struct {
-				Path       string `json:"path"`
-				MaxResults int    `json:"max_results"`
+				Path           string          `json:"path"`
+				MaxResults     int             `json:"max_results"`
+				IncludeOutline json.RawMessage `json:"include_outline"`
 			}
 			if err := decode(arguments, &input); err != nil {
 				return nil, err
@@ -218,15 +222,48 @@ func (tools WorkspaceTools) listUploadsTool() tool.Tool {
 			if input.Path == "" {
 				input.Path = workspace.UploadsRoot
 			}
+			all, selected, err := outlineSelection(input.IncludeOutline)
+			if err != nil {
+				return nil, err
+			}
+			if tools.Uploads != nil {
+				return tools.Uploads.List(tools.Workspace, uploads.ListOptions{
+					MaxResults: input.MaxResults, IncludeOutline: all, OutlineFiles: selected,
+				})
+			}
 			return tools.Workspace.List(input.Path, workspace.ListOptions{MaxDepth: 1, MaxResults: input.MaxResults})
 		},
 	)
+	function.DefinitionValue.UntrustedOutput = true
+	return function
+}
+
+func outlineSelection(raw json.RawMessage) (bool, map[string]struct{}, error) {
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return false, nil, nil
+	}
+	var all bool
+	if err := json.Unmarshal(raw, &all); err == nil {
+		return all, nil, nil
+	}
+	var filenames []string
+	if err := json.Unmarshal(raw, &filenames); err != nil {
+		return false, nil, errors.New("include_outline must be a boolean or filename array")
+	}
+	selected := make(map[string]struct{}, len(filenames))
+	for _, filename := range filenames {
+		if strings.TrimSpace(filename) == "" {
+			return false, nil, errors.New("include_outline filenames cannot be blank")
+		}
+		selected[filename] = struct{}{}
+	}
+	return false, selected, nil
 }
 
 func functionTool(
 	name, description, schema string,
 	execute func(context.Context, json.RawMessage) (any, error),
-) tool.Tool {
+) tool.Func {
 	return tool.Func{
 		DefinitionValue: tool.Definition{
 			Name: name, Description: description, InputSchema: json.RawMessage(schema), ReadOnly: readOnlyTool(name),

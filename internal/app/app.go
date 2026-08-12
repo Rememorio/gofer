@@ -49,6 +49,7 @@ import (
 	"github.com/Rememorio/gofer/internal/tool/builtin"
 	"github.com/Rememorio/gofer/internal/toolhistory"
 	"github.com/Rememorio/gofer/internal/tooloutput"
+	"github.com/Rememorio/gofer/internal/uploads"
 	"github.com/Rememorio/gofer/internal/webresearch"
 	"github.com/Rememorio/gofer/internal/workspace"
 	"github.com/Rememorio/gofer/internal/workspacechange"
@@ -62,6 +63,7 @@ type Service struct {
 	store      store.Store
 	closeStore io.Closer
 	workspaces *workspace.Manager
+	uploads    *uploads.Manager
 	artifacts  *artifact.Catalog
 	controls   *control.Service
 	feedback   feedback.Store
@@ -119,6 +121,9 @@ func (service *Service) open() error {
 	if err != nil {
 		return err
 	}
+	if err = service.openUploads(); err != nil {
+		return err
+	}
 	service.workspaces, err = workspace.NewManager(workspace.Config{
 		Root: service.config.Workspace.Root, MaxReadBytes: service.config.Workspace.MaxReadBytes,
 		MaxWriteBytes: service.config.Workspace.MaxWriteBytes, MaxUploadBytes: service.config.Workspace.MaxUploadBytes,
@@ -162,6 +167,32 @@ func (service *Service) open() error {
 		return err
 	}
 	service.startScheduler()
+	return nil
+}
+
+func (service *Service) openUploads() error {
+	configuration := service.config.Uploads
+	var converter uploads.Converter
+	if configuration.AutoConvertDocuments {
+		command, err := uploads.NewCommandConverter(configuration.ConverterCommand, configuration.MaxConvertedBytes)
+		if err != nil {
+			return err
+		}
+		converter = command
+	}
+	manager, err := uploads.New(uploads.Config{
+		AutoConvert:       configuration.AutoConvertDocuments,
+		ConversionTimeout: time.Duration(configuration.ConversionTimeoutSeconds) * time.Second,
+		MaxConvertedBytes: configuration.MaxConvertedBytes,
+		MaxContextFiles:   configuration.MaxContextFiles,
+		MaxContextChars:   configuration.MaxContextChars,
+		MaxOutlineEntries: configuration.MaxOutlineEntries,
+		MaxPreviewLines:   configuration.MaxPreviewLines,
+	}, converter)
+	if err != nil {
+		return err
+	}
+	service.uploads = manager
 	return nil
 }
 
@@ -488,6 +519,9 @@ func (service *Service) execute(ctx context.Context, launch gateway.StartRequest
 		return
 	}
 	defer func() { _ = children.Close() }()
+	if current := uploads.NewContextMiddleware(service.uploads.CurrentContext(threadWorkspace, settings.uploads)); current != nil {
+		middleware = append(middleware, current)
+	}
 	finishHooks := []runtime.FinishHook{
 		subagentFinishHook(children),
 		service.deliveryFinishHook(threadWorkspace, baseline, deliveryTracker, launch.RunID),
@@ -565,7 +599,7 @@ func (service *Service) buildTools(threadWorkspace *workspace.Thread, launch gat
 }
 
 func (service *Service) registerCoreTools(registry *tool.Registry, threadWorkspace *workspace.Thread, launch gateway.StartRequest) error {
-	if err := (builtin.WorkspaceTools{Workspace: threadWorkspace, Artifacts: service.artifacts}).Register(registry); err != nil {
+	if err := (builtin.WorkspaceTools{Workspace: threadWorkspace, Artifacts: service.artifacts, Uploads: service.uploads}).Register(registry); err != nil {
 		return err
 	}
 	if err := (control.Tools{Service: service.controls, ThreadID: launch.ThreadID}).Register(registry); err != nil {

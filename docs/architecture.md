@@ -57,6 +57,7 @@ Planned package groups:
 | `internal/policy` | Ordered authorization rules and tool resource extraction |
 | `internal/readbeforewrite` | Version-aware existing-file mutation gate and same-path execution serialization |
 | `internal/workspace` | Per-thread files, uploads, outputs, search, and traversal safety |
+| `internal/uploads` | Bounded conversion, outlines, current-file context, and upload discovery |
 | `internal/workspacechange` | Bounded run snapshots, privacy-aware diffs, and journal projection |
 | `internal/artifact` | Explicit user-facing output registration and streaming |
 | `internal/sandbox` | Local and isolated execution contracts |
@@ -107,3 +108,5 @@ Planned package groups:
 28. Length-capped tool intent never executes; only visible tool-free partial text may complete as capped.
 29. Safety-capped responses are always visible and tool-free before any other response policy observes them.
 30. Provider SDK types never cross the normalized model boundary; all adapters preserve tool-call integrity and exact reported usage.
+31. Upload metadata is only a hint: model context is built from owner-scoped files verified on disk and never changes the durable user message.
+32. Derived document text cannot overwrite a user upload; conversion is opt-in, shell-free, time-bounded, output-bounded, and receives no service secrets.

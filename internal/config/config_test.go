@@ -102,6 +102,16 @@ func TestConversationServiceDefaults(t *testing.T) {
 	}
 }
 
+func TestUploadDefaults(t *testing.T) {
+	t.Parallel()
+	uploads := Defaults().Uploads
+	if uploads.MaxFiles != 10 || uploads.MaxTotalBytes != 100<<20 || uploads.AutoConvertDocuments ||
+		strings.Join(uploads.ConverterCommand, " ") != "markitdown {input}" || uploads.MaxContextFiles != 10 ||
+		uploads.MaxContextChars != 50_000 || uploads.MaxOutlineEntries != 50 || uploads.MaxPreviewLines != 5 {
+		t.Fatalf("upload defaults = %#v", uploads)
+	}
+}
+
 func TestConversationServicesAcceptKnownModelAliases(t *testing.T) {
 	t.Parallel()
 
@@ -194,6 +204,22 @@ func TestValidateRejectsInvalidConfigurations(t *testing.T) {
 		{name: "workspace read limit", mutate: func(config *Config) { config.Workspace.MaxReadBytes = 0 }},
 		{name: "workspace write limit", mutate: func(config *Config) { config.Workspace.MaxWriteBytes = 0 }},
 		{name: "workspace upload limit", mutate: func(config *Config) { config.Workspace.MaxUploadBytes = 0 }},
+		{name: "upload file count", mutate: func(config *Config) { config.Uploads.MaxFiles = 0 }},
+		{name: "upload total below file", mutate: func(config *Config) { config.Uploads.MaxTotalBytes = config.Workspace.MaxUploadBytes - 1 }},
+		{name: "upload total high", mutate: func(config *Config) { config.Uploads.MaxTotalBytes = 11 << 30 }},
+		{name: "upload conversion timeout", mutate: func(config *Config) { config.Uploads.ConversionTimeoutSeconds = 0 }},
+		{name: "upload converted bytes", mutate: func(config *Config) { config.Uploads.MaxConvertedBytes = 1 }},
+		{name: "upload context files", mutate: func(config *Config) { config.Uploads.MaxContextFiles = 0 }},
+		{name: "upload context chars", mutate: func(config *Config) { config.Uploads.MaxContextChars = 0 }},
+		{name: "upload outline entries", mutate: func(config *Config) { config.Uploads.MaxOutlineEntries = 0 }},
+		{name: "upload preview lines", mutate: func(config *Config) { config.Uploads.MaxPreviewLines = 0 }},
+		{name: "upload converter blank", mutate: func(config *Config) { config.Uploads.ConverterCommand = []string{""} }},
+		{name: "upload converter missing", mutate: func(config *Config) {
+			config.Uploads.AutoConvertDocuments, config.Uploads.ConverterCommand = true, nil
+		}},
+		{name: "upload converter placeholder", mutate: func(config *Config) {
+			config.Uploads.AutoConvertDocuments, config.Uploads.ConverterCommand = true, []string{"converter", "input"}
+		}},
 		{name: "sandbox driver", mutate: func(config *Config) { config.Sandbox.Driver = "bad" }},
 		{name: "docker image", mutate: func(config *Config) { config.Sandbox.Driver, config.Sandbox.Image = "docker", "" }},
 		{name: "sandbox timeout", mutate: func(config *Config) { config.Sandbox.CommandTimeoutSeconds = 0 }},

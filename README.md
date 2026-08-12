@@ -42,7 +42,10 @@ Owner-scoped thread search, patch/delete, run and message feeds, state lookup,
 and journal-backed cross-run conversation continuity are also available.
 Model and feature discovery, durable skill enablement, bounded multipart
 uploads, persistent output discovery, and range-capable artifact delivery are
-exposed through the same owner-scoped API.
+exposed through the same owner-scoped API. Upload ingestion now enforces both
+per-file and aggregate request limits, supports opt-in bounded Office/PDF to
+Markdown conversion, injects sanitized current-file outlines without changing
+durable user messages, and gives agents bounded historical upload discovery.
 LangGraph clients can discover configured assistants and use create-and-stream,
 create-and-wait, stateless run, join, and run-scoped message compatibility
 endpoints over the same durable journal.
@@ -159,6 +162,8 @@ Search, direct document retrieval, and outbound network policy are documented
 in [Web research](docs/web-research.md).
 Automatic titles, input polishing, and follow-up suggestions are documented in
 [Conversation services](docs/conversation-services.md).
+Upload isolation, conversion, and model-context behavior are documented in
+[Uploads and document ingestion](docs/uploads.md).
 
 ## Development
 

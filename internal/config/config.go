@@ -34,6 +34,7 @@ type Config struct {
 	ToolOutput      ToolOutputConfig      `yaml:"tool_output" json:"tool_output"`
 	Storage         StorageConfig         `yaml:"storage" json:"storage"`
 	Workspace       WorkspaceConfig       `yaml:"workspace" json:"workspace"`
+	Uploads         UploadsConfig         `yaml:"uploads" json:"uploads"`
 	Sandbox         SandboxConfig         `yaml:"sandbox" json:"sandbox"`
 	Browser         BrowserConfig         `yaml:"browser" json:"browser"`
 	Web             WebConfig             `yaml:"web" json:"web"`
@@ -116,6 +117,21 @@ type WorkspaceConfig struct {
 	MaxReadBytes   int64  `yaml:"max_read_bytes" json:"max_read_bytes"`
 	MaxWriteBytes  int64  `yaml:"max_write_bytes" json:"max_write_bytes"`
 	MaxUploadBytes int64  `yaml:"max_upload_bytes" json:"max_upload_bytes"`
+}
+
+// UploadsConfig controls request-wide upload limits, optional document
+// conversion, and bounded current-upload context.
+type UploadsConfig struct {
+	MaxFiles                 int      `yaml:"max_files" json:"max_files"`
+	MaxTotalBytes            int64    `yaml:"max_total_bytes" json:"max_total_bytes"`
+	AutoConvertDocuments     bool     `yaml:"auto_convert_documents" json:"auto_convert_documents"`
+	ConverterCommand         []string `yaml:"converter_command" json:"converter_command"`
+	ConversionTimeoutSeconds int      `yaml:"conversion_timeout_seconds" json:"conversion_timeout_seconds"`
+	MaxConvertedBytes        int64    `yaml:"max_converted_bytes" json:"max_converted_bytes"`
+	MaxContextFiles          int      `yaml:"max_context_files" json:"max_context_files"`
+	MaxContextChars          int      `yaml:"max_context_chars" json:"max_context_chars"`
+	MaxOutlineEntries        int      `yaml:"max_outline_entries" json:"max_outline_entries"`
+	MaxPreviewLines          int      `yaml:"max_preview_lines" json:"max_preview_lines"`
 }
 
 // SandboxConfig selects the host-execution boundary.
@@ -324,6 +340,11 @@ func Defaults() Config {
 			Root: ".gofer/workspaces", MaxReadBytes: 1 << 20,
 			MaxWriteBytes: 80 << 10, MaxUploadBytes: 32 << 20,
 		},
+		Uploads: UploadsConfig{
+			MaxFiles: 10, MaxTotalBytes: 100 << 20, ConverterCommand: []string{"markitdown", "{input}"},
+			ConversionTimeoutSeconds: 120, MaxConvertedBytes: 1 << 20,
+			MaxContextFiles: 10, MaxContextChars: 50_000, MaxOutlineEntries: 50, MaxPreviewLines: 5,
+		},
 		Sandbox: SandboxConfig{
 			Driver: "local", DockerBinary: "docker", CommandTimeoutSeconds: 600,
 			MaxTimeoutSeconds: 3600, MaxOutputBytes: 1 << 20, MaxScriptBytes: 64 << 10,
@@ -428,6 +449,9 @@ func (config Config) Validate() error {
 	if err := validateWeb(config.Web); err != nil {
 		return err
 	}
+	if err := validateUploads(config.Uploads, config.Workspace); err != nil {
+		return err
+	}
 	if err := validateAgentExtensions(config.Skills, config.MCP, config.Memory); err != nil {
 		return err
 	}
@@ -441,6 +465,46 @@ func (config Config) Validate() error {
 		return err
 	}
 	return validateServiceModelAliases(config)
+}
+
+func validateUploads(uploads UploadsConfig, workspace WorkspaceConfig) error {
+	if !validUploadTransferLimits(uploads, workspace) || !validUploadConversionLimits(uploads, workspace) ||
+		!validUploadContextLimits(uploads) {
+		return fmt.Errorf("%w: invalid upload limits", ErrInvalid)
+	}
+	return validateUploadConverterCommand(uploads)
+}
+
+func validUploadTransferLimits(uploads UploadsConfig, workspace WorkspaceConfig) bool {
+	return uploads.MaxFiles >= 1 && uploads.MaxFiles <= 100 &&
+		uploads.MaxTotalBytes >= workspace.MaxUploadBytes && uploads.MaxTotalBytes <= 10<<30
+}
+
+func validUploadConversionLimits(uploads UploadsConfig, workspace WorkspaceConfig) bool {
+	return uploads.ConversionTimeoutSeconds >= 1 && uploads.ConversionTimeoutSeconds <= 1800 &&
+		uploads.MaxConvertedBytes >= 1024 && uploads.MaxConvertedBytes <= workspace.MaxReadBytes &&
+		uploads.MaxConvertedBytes <= 100<<20
+}
+
+func validUploadContextLimits(uploads UploadsConfig) bool {
+	return uploads.MaxContextFiles >= 1 && uploads.MaxContextFiles <= 100 &&
+		uploads.MaxContextChars >= 1024 && uploads.MaxContextChars <= 1_000_000 &&
+		uploads.MaxOutlineEntries >= 1 && uploads.MaxOutlineEntries <= 1000 &&
+		uploads.MaxPreviewLines >= 1 && uploads.MaxPreviewLines <= 100
+}
+
+func validateUploadConverterCommand(uploads UploadsConfig) error {
+	foundInput := false
+	for _, argument := range uploads.ConverterCommand {
+		if strings.TrimSpace(argument) == "" || strings.IndexByte(argument, 0) >= 0 {
+			return fmt.Errorf("%w: invalid upload converter command", ErrInvalid)
+		}
+		foundInput = foundInput || strings.Contains(argument, "{input}")
+	}
+	if uploads.AutoConvertDocuments && (len(uploads.ConverterCommand) == 0 || !foundInput) {
+		return fmt.Errorf("%w: upload converter command with {input} is required", ErrInvalid)
+	}
+	return nil
 }
 
 func validateConversationServices(title TitleConfig, suggestions SuggestionsConfig, polish InputPolishConfig) error {

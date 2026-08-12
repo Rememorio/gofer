@@ -56,6 +56,18 @@ func TestDecodeLaunchAcceptsArrayAndStringToolOutput(t *testing.T) {
 	}
 }
 
+func TestDecodeLaunchAcceptsCurrentUploadMetadata(t *testing.T) {
+	t.Parallel()
+	messages, settings, err := decodeLaunch(gateway.RunRequest{Input: json.RawMessage(`{"messages":[
+		{"role":"user","content":"old","files":[{"filename":"old.txt","size":1}]},
+		{"role":"assistant","content":"reply"},
+		{"role":"user","content":"new","additional_kwargs":{"files":[{"filename":"report.pdf","size":42}],"client":"web"}}
+	]}`)}, time.Now())
+	if err != nil || len(messages) != 3 || len(settings.uploads) != 1 || settings.uploads[0].Filename != "report.pdf" || settings.uploads[0].Size != 42 {
+		t.Fatalf("messages/settings = %#v / %#v, %v", messages, settings, err)
+	}
+}
+
 func TestDecodeLaunchRejectsMalformedInputs(t *testing.T) {
 	t.Parallel()
 	tests := []gateway.RunRequest{
@@ -72,6 +84,9 @@ func TestDecodeLaunchRejectsMalformedInputs(t *testing.T) {
 		{Input: json.RawMessage(`{"messages":[{"role":"user","content":"x"}]}`), Context: json.RawMessage(`{`)},
 		{Input: json.RawMessage(`{"messages":[{"role":"user","content":"x"}]}`), Context: json.RawMessage(`{"max_tokens":-1}`)},
 		{Input: json.RawMessage(`{"messages":[{"role":"user","content":"x"}]}`), Context: json.RawMessage(`{"temperature":3}`)},
+		{Input: json.RawMessage(`{"messages":[{"role":"user","content":"x","additional_kwargs":[]}]}`)},
+		{Input: json.RawMessage(`{"messages":[{"role":"user","content":"x","files":{}}]}`)},
+		{Input: json.RawMessage(`{"messages":[{"role":"user","content":"x","files":[{"filename":"x","size":-1}]}]}`)},
 	}
 	for index, request := range tests {
 		if _, _, err := decodeLaunch(request, time.Now()); err == nil {

@@ -51,6 +51,22 @@ workspace:
   max_write_bytes: 81920
   max_upload_bytes: 33554432
 
+# Upload batches are bounded separately from each file. Host-side Office/PDF
+# conversion is disabled by default because document parsers process untrusted
+# input. When enabled, the argv runs directly without a shell and must emit
+# UTF-8 Markdown on stdout; {input} expands to a private temporary file.
+uploads:
+  max_files: 10
+  max_total_bytes: 104857600
+  auto_convert_documents: false
+  converter_command: [markitdown, "{input}"]
+  conversion_timeout_seconds: 120
+  max_converted_bytes: 1048576
+  max_context_files: 10
+  max_context_chars: 50000
+  max_outline_entries: 50
+  max_preview_lines: 5
+
 sandbox:
   driver: local
   # Local command execution is disabled unless explicitly trusted.
