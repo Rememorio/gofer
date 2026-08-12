@@ -71,6 +71,9 @@ func (catalog *Catalog) Present(
 		if !isOutputPath(virtualPath) {
 			return nil, fmt.Errorf("%w: only %s files can be presented", ErrInvalidArtifact, workspace.OutputsRoot)
 		}
+		if thread.IsInternalOutputPath(virtualPath) {
+			return nil, fmt.Errorf("%w: internal output files cannot be presented", ErrInvalidArtifact)
+		}
 		entry, err := thread.Inspect(virtualPath)
 		if err != nil {
 			return nil, err
@@ -127,6 +130,9 @@ func (catalog *Catalog) Open(thread *workspace.Thread, virtualPath string) (io.R
 	if catalog == nil || thread == nil {
 		return nil, Artifact{}, fmt.Errorf("%w: catalog and workspace are required", ErrInvalidArtifact)
 	}
+	if thread.IsInternalOutputPath(virtualPath) {
+		return nil, Artifact{}, fmt.Errorf("%w: internal output", ErrInvalidArtifact)
+	}
 	catalog.mu.RLock()
 	artifact, exists := catalog.entries[thread.ID()][virtualPath]
 	catalog.mu.RUnlock()
@@ -142,7 +148,7 @@ func (catalog *Catalog) Open(thread *workspace.Thread, virtualPath string) (io.R
 
 // Inspect returns one generated or uploaded file without catalog membership.
 func Inspect(thread *workspace.Thread, virtualPath string) (Artifact, error) {
-	if thread == nil || !isPublicPath(virtualPath) {
+	if thread == nil || !isPublicPath(virtualPath) || thread.IsInternalOutputPath(virtualPath) {
 		return Artifact{}, ErrInvalidArtifact
 	}
 	entry, err := thread.Inspect(virtualPath)

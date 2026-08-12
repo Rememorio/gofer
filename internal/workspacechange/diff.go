@@ -30,7 +30,9 @@ func Compare(before, after *Snapshot, limits Limits) (Result, error) {
 		}
 	}
 	state.summary.Truncated = state.truncated
-	return Result{Version: resultVersion, Summary: state.summary, Files: state.files, Limits: resolved}, nil
+	publicLimits := resolved
+	publicLimits.ExcludedDirectoryName = ""
+	return Result{Version: resultVersion, Summary: state.summary, Files: state.files, Limits: publicLimits}, nil
 }
 
 type compareState struct {

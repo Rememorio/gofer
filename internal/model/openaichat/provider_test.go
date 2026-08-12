@@ -154,6 +154,16 @@ func TestMessageConversionFailures(t *testing.T) {
 	}
 }
 
+func TestToolMessageContentDecodesJSONString(t *testing.T) {
+	t.Parallel()
+	if got := toolMessageContent(json.RawMessage(`"preview\nline"`)); got != "preview\nline" {
+		t.Fatalf("toolMessageContent(string) = %q", got)
+	}
+	if got := toolMessageContent(json.RawMessage(`{"ok":true}`)); got != `{"ok":true}` {
+		t.Fatalf("toolMessageContent(object) = %q", got)
+	}
+}
+
 func TestStreamProtocolFailures(t *testing.T) {
 	t.Parallel()
 

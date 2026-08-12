@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -246,6 +247,68 @@ func TestRunnerPersistsToolOutcomeBeforeAfterMiddleware(t *testing.T) {
 	}
 	assertRunStatus(t, fixture.store, fixture.run.ID, domain.RunFailed)
 	assertContainsEvent(t, fixture.store, fixture.run.ID, event.ToolCompleted)
+}
+
+func TestRunnerObservesRawResultThenPersistsTransformation(t *testing.T) {
+	t.Parallel()
+	registry := tool.NewRegistry()
+	if err := registry.Register(echoTool(nil)); err != nil {
+		t.Fatal(err)
+	}
+	call := domain.ToolCall{ID: "call-1", Name: "echo", Arguments: json.RawMessage(`{"text":"raw"}`)}
+	boundary := &resultBoundaryMiddleware{mutateObserved: true}
+	fixture := newFixtureWithMiddleware(t, [][]model.Chunk{
+		{{Kind: model.ChunkToolCall, ToolCall: &call}, {Kind: model.ChunkDone, StopReason: model.StopToolUse}},
+		{{Kind: model.ChunkTextDelta, Text: "done"}, {Kind: model.ChunkDone, StopReason: model.StopEndTurn}},
+	}, registry, []Middleware{boundary})
+	result, err := fixture.runner.Run(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(result.Messages[2].Content[0].ToolResult.Output); got != `{"budgeted":true}` {
+		t.Fatalf("persisted output = %s", got)
+	}
+	if boundary.observed != `{"text":"raw"}` || boundary.transformInput != `{"text":"raw"}` || boundary.after != `{"budgeted":true}` {
+		t.Fatalf("boundary = %#v", boundary)
+	}
+	if got := string(fixture.provider.Requests[1].Messages[2].Content[0].ToolResult.Output); got != `{"budgeted":true}` {
+		t.Fatalf("model output = %s", got)
+	}
+}
+
+func TestRunnerFailsBeforeToolPersistenceOnResultBoundaryError(t *testing.T) {
+	t.Parallel()
+	registry := tool.NewRegistry()
+	if err := registry.Register(echoTool(nil)); err != nil {
+		t.Fatal(err)
+	}
+	call := domain.ToolCall{ID: "call-1", Name: "echo", Arguments: json.RawMessage(`{"text":"raw"}`)}
+	tests := []struct{ stage, want string }{
+		{stage: "observe", want: "observe result"},
+		{stage: "transform", want: "transform result"},
+		{stage: "invalid", want: "protocol violation"},
+	}
+	for _, test := range tests {
+		t.Run(test.stage, func(t *testing.T) {
+			boundary := &resultBoundaryMiddleware{fail: test.stage}
+			fixture := newFixtureWithMiddleware(t, [][]model.Chunk{{
+				{Kind: model.ChunkToolCall, ToolCall: &call}, {Kind: model.ChunkDone, StopReason: model.StopToolUse},
+			}}, registry, []Middleware{boundary})
+			if _, err := fixture.runner.Run(context.Background(), fixture.request); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Run() error = %v", err)
+			}
+			assertRunStatus(t, fixture.store, fixture.run.ID, domain.RunFailed)
+			records, err := fixture.store.Events(context.Background(), fixture.run.ID, 0, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, record := range records {
+				if record.Kind == event.ToolCompleted {
+					t.Fatalf("tool result persisted after %s failure", test.stage)
+				}
+			}
+		})
+	}
 }
 
 func TestNopMiddleware(t *testing.T) {
@@ -537,6 +600,44 @@ type failingAfterToolMiddleware struct{ NopMiddleware }
 
 func (failingAfterToolMiddleware) AfterTool(context.Context, domain.ToolCall, domain.ToolResult) error {
 	return errors.New("after tool failed")
+}
+
+type resultBoundaryMiddleware struct {
+	NopMiddleware
+	observed       string
+	transformInput string
+	after          string
+	fail           string
+	mutateObserved bool
+}
+
+func (middleware *resultBoundaryMiddleware) ObserveToolResult(_ context.Context, _ domain.ToolCall, result domain.ToolResult) error {
+	if middleware.fail == "observe" {
+		return errors.New("observe result failed")
+	}
+	middleware.observed = string(result.Output)
+	if middleware.mutateObserved && len(result.Output) > 0 {
+		result.Output[0] = 'x'
+	}
+	return nil
+}
+
+func (middleware *resultBoundaryMiddleware) TransformToolResult(_ context.Context, _ domain.ToolCall, result domain.ToolResult) (domain.ToolResult, error) {
+	middleware.transformInput = string(result.Output)
+	if middleware.fail == "transform" {
+		return domain.ToolResult{}, errors.New("transform result failed")
+	}
+	if middleware.fail == "invalid" {
+		result.CallID = "different"
+		return result, nil
+	}
+	result.Output = json.RawMessage(`{"budgeted":true}`)
+	return result, nil
+}
+
+func (middleware *resultBoundaryMiddleware) AfterTool(_ context.Context, _ domain.ToolCall, result domain.ToolResult) error {
+	middleware.after = string(result.Output)
+	return nil
 }
 
 func (middleware *recordingMiddleware) BeforeModel(context.Context, *model.Request) error {

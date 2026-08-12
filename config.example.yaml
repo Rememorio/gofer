@@ -15,6 +15,18 @@ runtime:
   min_recent_messages: 8
   max_summary_chars: 20000
 
+tool_output:
+  enabled: true
+  externalize_min_chars: 12000
+  preview_head_chars: 2000
+  preview_tail_chars: 1000
+  fallback_max_chars: 30000
+  fallback_head_chars: 8000
+  fallback_tail_chars: 3000
+  storage_subdir: .tool-results
+  exempt_tools: [read_file, read_file_tool]
+  tool_overrides: {}
+
 storage:
   driver: sqlite
   dsn: .gofer/gofer.db

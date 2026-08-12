@@ -14,9 +14,9 @@ const (
 
 var (
 	// ErrIncomplete identifies changed outputs not covered by present_files.
-	ErrIncomplete = errors.New("Artifact delivery incomplete: no produced output artifact was presented")
+	ErrIncomplete = errors.New("Artifact delivery incomplete: no produced output artifact was presented") //nolint:staticcheck // Stable DeerFlow-compatible error contract.
 	// ErrReceiptFailed identifies an unverifiable delivery due to journal failure.
-	ErrReceiptFailed = errors.New("Artifact delivery verification failed: terminal delivery receipt could not be persisted")
+	ErrReceiptFailed = errors.New("Artifact delivery verification failed: terminal delivery receipt could not be persisted") //nolint:staticcheck // Stable DeerFlow-compatible error contract.
 )
 
 // Verification describes how produced outputs are matched to presentation.

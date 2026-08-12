@@ -61,6 +61,10 @@ models:
 	if config.Browser.MaxSessions != 32 || config.Browser.Enabled {
 		t.Fatalf("default browser settings were not preserved: %#v", config.Browser)
 	}
+	if !config.ToolOutput.Enabled || config.ToolOutput.ExternalizeMinChars != 12_000 ||
+		config.ToolOutput.StorageSubdir != ".tool-results" || len(config.ToolOutput.ExemptTools) != 2 {
+		t.Fatalf("default tool output budget was not preserved: %#v", config.ToolOutput)
+	}
 }
 
 func TestLoadRejectsInvalidInput(t *testing.T) {
@@ -102,6 +106,13 @@ func TestValidateRejectsInvalidConfigurations(t *testing.T) {
 		{name: "runtime reserve", mutate: func(config *Config) { config.Runtime.ReserveTokens = config.Runtime.MaxContextTokens }},
 		{name: "runtime recent", mutate: func(config *Config) { config.Runtime.MinRecentMessages = 0 }},
 		{name: "runtime summary", mutate: func(config *Config) { config.Runtime.MaxSummaryChars = 0 }},
+		{name: "tool output negative", mutate: func(config *Config) { config.ToolOutput.FallbackMaxChars = -1 }},
+		{name: "tool output nested directory", mutate: func(config *Config) { config.ToolOutput.StorageSubdir = "cache/results" }},
+		{name: "tool output dot directory", mutate: func(config *Config) { config.ToolOutput.StorageSubdir = ".." }},
+		{name: "tool output spaced directory", mutate: func(config *Config) { config.ToolOutput.StorageSubdir = " cache" }},
+		{name: "tool output duplicate exemption", mutate: func(config *Config) { config.ToolOutput.ExemptTools = []string{"read", "read"} }},
+		{name: "tool output blank exemption", mutate: func(config *Config) { config.ToolOutput.ExemptTools = []string{" read"} }},
+		{name: "tool output invalid override", mutate: func(config *Config) { config.ToolOutput.ToolOverrides = map[string]int{"tool": -1} }},
 		{name: "storage driver", mutate: func(config *Config) { config.Storage.Driver = "bad" }},
 		{name: "storage DSN", mutate: func(config *Config) { config.Storage.DSN = "" }},
 		{name: "workspace root", mutate: func(config *Config) { config.Workspace.Root = "" }},

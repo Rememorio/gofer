@@ -117,6 +117,49 @@ func TestWorkspaceRejectsUnsafeAndOversizedOperations(t *testing.T) {
 	}
 }
 
+func TestWorkspaceClassifiesInternalOutputs(t *testing.T) {
+	t.Parallel()
+	thread := newTestWorkspace(t, Config{InternalOutputDirectories: []string{"process-cache"}})
+	defer func() { _ = thread.Close() }()
+	for _, virtualPath := range []string{
+		OutputsRoot + "/" + ProcessOutputDirectory,
+		OutputsRoot + "/" + ProcessOutputDirectory + "/result.txt",
+		OutputsRoot + "/process-cache/result.txt",
+	} {
+		if !thread.IsInternalOutputPath(virtualPath) {
+			t.Fatalf("IsInternalOutputPath(%q) = false", virtualPath)
+		}
+	}
+	for _, virtualPath := range []string{OutputsRoot + "/report.txt", WorkspaceRoot + "/process-cache/result.txt", "invalid"} {
+		if thread.IsInternalOutputPath(virtualPath) {
+			t.Fatalf("IsInternalOutputPath(%q) = true", virtualPath)
+		}
+	}
+	internalFile := OutputsRoot + "/process-cache/result.txt"
+	if err := thread.WriteFile(internalFile, []byte("private"), false); err != nil {
+		t.Fatal(err)
+	}
+	if err := thread.WriteFile(OutputsRoot+"/report.txt", []byte("public"), false); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := thread.List(OutputsRoot, ListOptions{MaxDepth: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paths := entryPaths(listed.Entries); len(paths) != 1 || paths[0] != OutputsRoot+"/report.txt" || listed.Truncated {
+		t.Fatalf("List(outputs) = %#v", listed)
+	}
+	if result, err := thread.ReadFile(internalFile, ReadOptions{}); err != nil || result.Content != "private" {
+		t.Fatalf("ReadFile(internal) = %#v, %v", result, err)
+	}
+	if (*Thread)(nil).IsInternalOutputPath(OutputsRoot + "/x") {
+		t.Fatal("nil IsInternalOutputPath() = true")
+	}
+	if _, err := NewManager(Config{Root: t.TempDir(), InternalOutputDirectories: []string{"nested/results"}}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("NewManager(invalid internal directory) error = %v", err)
+	}
+}
+
 func TestWorkspaceRootBlocksSymlinkEscape(t *testing.T) {
 	t.Parallel()
 

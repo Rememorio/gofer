@@ -24,21 +24,22 @@ var (
 
 // Config is Gofer's versioned root configuration.
 type Config struct {
-	Version   int             `yaml:"config_version" json:"config_version"`
-	LogLevel  string          `yaml:"log_level" json:"log_level"`
-	Server    ServerConfig    `yaml:"server" json:"server"`
-	Runtime   RuntimeConfig   `yaml:"runtime" json:"runtime"`
-	Storage   StorageConfig   `yaml:"storage" json:"storage"`
-	Workspace WorkspaceConfig `yaml:"workspace" json:"workspace"`
-	Sandbox   SandboxConfig   `yaml:"sandbox" json:"sandbox"`
-	Browser   BrowserConfig   `yaml:"browser" json:"browser"`
-	Skills    SkillsConfig    `yaml:"skills" json:"skills"`
-	MCP       MCPConfig       `yaml:"mcp" json:"mcp"`
-	Memory    MemoryConfig    `yaml:"memory" json:"memory"`
-	Auth      AuthConfig      `yaml:"auth" json:"auth"`
-	Scheduler SchedulerConfig `yaml:"scheduler" json:"scheduler"`
-	Channels  ChannelsConfig  `yaml:"channels" json:"channels"`
-	Models    []ModelConfig   `yaml:"models" json:"models"`
+	Version    int              `yaml:"config_version" json:"config_version"`
+	LogLevel   string           `yaml:"log_level" json:"log_level"`
+	Server     ServerConfig     `yaml:"server" json:"server"`
+	Runtime    RuntimeConfig    `yaml:"runtime" json:"runtime"`
+	ToolOutput ToolOutputConfig `yaml:"tool_output" json:"tool_output"`
+	Storage    StorageConfig    `yaml:"storage" json:"storage"`
+	Workspace  WorkspaceConfig  `yaml:"workspace" json:"workspace"`
+	Sandbox    SandboxConfig    `yaml:"sandbox" json:"sandbox"`
+	Browser    BrowserConfig    `yaml:"browser" json:"browser"`
+	Skills     SkillsConfig     `yaml:"skills" json:"skills"`
+	MCP        MCPConfig        `yaml:"mcp" json:"mcp"`
+	Memory     MemoryConfig     `yaml:"memory" json:"memory"`
+	Auth       AuthConfig       `yaml:"auth" json:"auth"`
+	Scheduler  SchedulerConfig  `yaml:"scheduler" json:"scheduler"`
+	Channels   ChannelsConfig   `yaml:"channels" json:"channels"`
+	Models     []ModelConfig    `yaml:"models" json:"models"`
 }
 
 // ServerConfig controls the HTTP gateway listener.
@@ -57,6 +58,20 @@ type RuntimeConfig struct {
 	ReserveTokens     int `yaml:"reserve_tokens" json:"reserve_tokens"`
 	MinRecentMessages int `yaml:"min_recent_messages" json:"min_recent_messages"`
 	MaxSummaryChars   int `yaml:"max_summary_chars" json:"max_summary_chars"`
+}
+
+// ToolOutputConfig bounds tool results before they re-enter model context.
+type ToolOutputConfig struct {
+	Enabled             bool           `yaml:"enabled" json:"enabled"`
+	ExternalizeMinChars int            `yaml:"externalize_min_chars" json:"externalize_min_chars"`
+	PreviewHeadChars    int            `yaml:"preview_head_chars" json:"preview_head_chars"`
+	PreviewTailChars    int            `yaml:"preview_tail_chars" json:"preview_tail_chars"`
+	FallbackMaxChars    int            `yaml:"fallback_max_chars" json:"fallback_max_chars"`
+	FallbackHeadChars   int            `yaml:"fallback_head_chars" json:"fallback_head_chars"`
+	FallbackTailChars   int            `yaml:"fallback_tail_chars" json:"fallback_tail_chars"`
+	StorageSubdir       string         `yaml:"storage_subdir" json:"storage_subdir"`
+	ExemptTools         []string       `yaml:"exempt_tools" json:"exempt_tools"`
+	ToolOverrides       map[string]int `yaml:"tool_overrides" json:"tool_overrides"`
 }
 
 // StorageConfig selects the durable state adapter.
@@ -209,6 +224,13 @@ func Defaults() Config {
 			MinRecentMessages: 8,
 			MaxSummaryChars:   20_000,
 		},
+		ToolOutput: ToolOutputConfig{
+			Enabled: true, ExternalizeMinChars: 12_000,
+			PreviewHeadChars: 2_000, PreviewTailChars: 1_000,
+			FallbackMaxChars: 30_000, FallbackHeadChars: 8_000, FallbackTailChars: 3_000,
+			StorageSubdir: ".tool-results", ExemptTools: []string{"read_file", "read_file_tool"},
+			ToolOverrides: make(map[string]int),
+		},
 		Storage: StorageConfig{Driver: "sqlite", DSN: ".gofer/gofer.db"},
 		Workspace: WorkspaceConfig{
 			Root: ".gofer/workspaces", MaxReadBytes: 1 << 20,
@@ -291,6 +313,9 @@ func (config Config) Validate() error {
 	if err := validateSandbox(config.Sandbox); err != nil {
 		return err
 	}
+	if err := validateToolOutput(config.ToolOutput); err != nil {
+		return err
+	}
 	if err := validateBrowser(config.Browser); err != nil {
 		return err
 	}
@@ -361,6 +386,36 @@ func validateRuntime(runtime RuntimeConfig) error {
 		return fmt.Errorf("%w: runtime limits must be positive", ErrInvalid)
 	}
 	return nil
+}
+
+func validateToolOutput(output ToolOutputConfig) error {
+	if output.ExternalizeMinChars < 0 || output.PreviewHeadChars < 0 || output.PreviewTailChars < 0 ||
+		output.FallbackMaxChars < 0 || output.FallbackHeadChars < 0 || output.FallbackTailChars < 0 {
+		return fmt.Errorf("%w: tool output limits cannot be negative", ErrInvalid)
+	}
+	if !singlePathSegment(output.StorageSubdir) {
+		return fmt.Errorf("%w: tool_output.storage_subdir must be one directory name", ErrInvalid)
+	}
+	seen := make(map[string]struct{}, len(output.ExemptTools))
+	for _, name := range output.ExemptTools {
+		if strings.TrimSpace(name) != name || name == "" {
+			return fmt.Errorf("%w: tool output exempt tool names cannot be empty", ErrInvalid)
+		}
+		if _, exists := seen[name]; exists {
+			return fmt.Errorf("%w: duplicate tool output exemption %q", ErrInvalid, name)
+		}
+		seen[name] = struct{}{}
+	}
+	for name, threshold := range output.ToolOverrides {
+		if strings.TrimSpace(name) != name || name == "" || threshold < 0 {
+			return fmt.Errorf("%w: invalid tool output override", ErrInvalid)
+		}
+	}
+	return nil
+}
+
+func singlePathSegment(value string) bool {
+	return strings.TrimSpace(value) == value && value != "" && value != "." && value != ".." && !strings.ContainsAny(value, "/\\\x00")
 }
 
 func validateAgentExtensions(skills SkillsConfig, mcp MCPConfig, memory MemoryConfig) error {

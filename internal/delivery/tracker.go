@@ -26,11 +26,14 @@ type Tracker struct {
 	seen    map[presentation]struct{}
 }
 
+var _ runtime.ToolResultObserver = (*Tracker)(nil)
+
 // NewTracker constructs an empty run-scoped tracker.
 func NewTracker() *Tracker { return &Tracker{seen: make(map[presentation]struct{})} }
 
-// AfterTool records artifact paths from one successful structured tool result.
-func (tracker *Tracker) AfterTool(_ context.Context, call domain.ToolCall, result domain.ToolResult) error {
+// ObserveToolResult records artifact paths from one successful, unmodified
+// tool result before context-budget middleware can replace it with a synopsis.
+func (tracker *Tracker) ObserveToolResult(_ context.Context, call domain.ToolCall, result domain.ToolResult) error {
 	if tracker == nil || result.IsError {
 		return nil
 	}

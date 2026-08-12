@@ -380,25 +380,66 @@ func (execution *execution) persistToolOutcomes(ctx context.Context, outcomes []
 		if outcome.err != nil {
 			return nil, outcome.err
 		}
+		if err := execution.runner.observeToolResult(ctx, outcome.call, outcome.result); err != nil {
+			return nil, err
+		}
+		result, err := execution.runner.transformToolResult(ctx, outcome.call, outcome.result)
+		if err != nil {
+			return nil, err
+		}
 		kind := event.ToolCompleted
-		if outcome.result.IsError {
+		if result.IsError {
 			kind = event.ToolFailed
 		}
-		message, err := toolResultMessage(outcome.result, execution.runner.now())
+		message, err := toolResultMessage(result, execution.runner.now())
 		if err != nil {
 			return nil, err
 		}
 		if err := execution.journal.append(ctx, kind, map[string]any{
-			"call": outcome.call, "result": outcome.result, "message": message,
+			"call": outcome.call, "result": result, "message": message,
 		}); err != nil {
 			return nil, err
 		}
-		if err := execution.runner.afterTool(ctx, outcome.call, outcome.result); err != nil {
+		if err := execution.runner.afterTool(ctx, outcome.call, result); err != nil {
 			return nil, err
 		}
 		messages = append(messages, message)
 	}
 	return messages, nil
+}
+
+func (runner *Runner) observeToolResult(ctx context.Context, call domain.ToolCall, result domain.ToolResult) error {
+	for _, middleware := range runner.middleware {
+		observer, ok := middleware.(ToolResultObserver)
+		if !ok {
+			continue
+		}
+		observed := result
+		observed.Output = append(json.RawMessage(nil), result.Output...)
+		if err := observer.ObserveToolResult(ctx, call, observed); err != nil {
+			return fmt.Errorf("observe tool %s result: %w", call.Name, err)
+		}
+	}
+	return nil
+}
+
+func (runner *Runner) transformToolResult(ctx context.Context, call domain.ToolCall, result domain.ToolResult) (domain.ToolResult, error) {
+	for _, middleware := range runner.middleware {
+		transformer, ok := middleware.(ToolResultTransformer)
+		if !ok {
+			continue
+		}
+		transformed, err := transformer.TransformToolResult(ctx, call, result)
+		if err != nil {
+			return domain.ToolResult{}, fmt.Errorf("transform tool %s result: %w", call.Name, err)
+		}
+		if transformed.CallID != result.CallID || transformed.IsError != result.IsError ||
+			len(transformed.Output) == 0 || !json.Valid(transformed.Output) {
+			return domain.ToolResult{}, fmt.Errorf("transform tool %s result: %w: transformer changed identity, status, or JSON validity", call.Name, ErrProtocol)
+		}
+		result = transformed
+	}
+	return result, nil
 }
 
 func (execution *execution) complete(ctx context.Context) (Result, error) {

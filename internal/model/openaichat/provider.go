@@ -210,7 +210,15 @@ func convertToolMessage(contents []domain.Content) (openai.ChatCompletionMessage
 		return openai.ChatCompletionMessageParamUnion{}, errors.New("tool message must contain exactly one tool result")
 	}
 	result := contents[0].ToolResult
-	return openai.ToolMessage(string(result.Output), result.CallID), nil
+	return openai.ToolMessage(toolMessageContent(result.Output), result.CallID), nil
+}
+
+func toolMessageContent(output json.RawMessage) string {
+	var text string
+	if json.Unmarshal(output, &text) == nil {
+		return text
+	}
+	return string(output)
 }
 
 func textOnly(contents []domain.Content) (string, error) {

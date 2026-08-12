@@ -33,6 +33,11 @@ Optional agent extensions are initialized before the listener becomes ready:
 - The runtime estimates prompt size before every model turn and uses the active
   model to summarize older, tool-safe message groups when the configured
   context budget is exceeded.
+- `tool_output` externalizes oversized tool results before they reach the
+  journal or another model turn. The complete result remains readable under
+  `/mnt/user-data/outputs/.tool-results` while the model receives a typed
+  synopsis and bounded raw sample. `read_file` is exempt to prevent spill/read
+  loops, and failed persistence falls back to strict inline truncation.
 - `subagent_spawn` starts bounded parallel child agents. Each child gets an
   isolated run journal and tool registry while sharing only the parent's
   policy-controlled workspace, configured extensions, and tenant scope. The

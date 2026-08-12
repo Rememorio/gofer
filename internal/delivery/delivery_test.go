@@ -20,13 +20,13 @@ func TestTrackerBuildsIsolatedAttributedReceipt(t *testing.T) {
 	presentOutput := json.RawMessage(`[{"path":"/mnt/user-data/outputs/report.md"},{"path":"/mnt/user-data/outputs/appendix.md"}]`)
 	call := domain.ToolCall{ID: "one", Name: ToolPresentFiles, Arguments: json.RawMessage(`{}`)}
 	result := domain.ToolResult{CallID: call.ID, Output: presentOutput}
-	if err := tracker.AfterTool(context.Background(), call, result); err != nil {
+	if err := tracker.ObserveToolResult(context.Background(), call, result); err != nil {
 		t.Fatal(err)
 	}
-	_ = tracker.AfterTool(context.Background(), call, result)
+	_ = tracker.ObserveToolResult(context.Background(), call, result)
 	browser := domain.ToolCall{ID: "two", Name: "browser_screenshot", Arguments: json.RawMessage(`{}`)}
-	_ = tracker.AfterTool(context.Background(), browser, domain.ToolResult{CallID: browser.ID, Output: json.RawMessage(`{"artifacts":[{"path":"/mnt/user-data/outputs/shot.png"}]}`)})
-	_ = tracker.AfterTool(context.Background(), call, domain.ToolResult{CallID: call.ID, Output: presentOutput, IsError: true})
+	_ = tracker.ObserveToolResult(context.Background(), browser, domain.ToolResult{CallID: browser.ID, Output: json.RawMessage(`{"artifacts":[{"path":"/mnt/user-data/outputs/shot.png"}]}`)})
+	_ = tracker.ObserveToolResult(context.Background(), call, domain.ToolResult{CallID: call.ID, Output: presentOutput, IsError: true})
 
 	receipt := tracker.Receipt([]string{workspace.OutputsRoot + "/report.md", workspace.OutputsRoot + "/new.md"})
 	if receipt.Presented != 3 || len(receipt.Paths) != 3 || len(receipt.ByTool[ToolPresentFiles]) != 2 {
@@ -51,15 +51,15 @@ func TestTrackerValidatesArtifactOutputShapes(t *testing.T) {
 		json.RawMessage(`{"artifacts":"bad"}`), json.RawMessage(`null`), json.RawMessage(`{`),
 	} {
 		call := domain.ToolCall{ID: "call", Name: "tool", Arguments: json.RawMessage(`{}`)}
-		if err := tracker.AfterTool(context.Background(), call, domain.ToolResult{CallID: "call", Output: output}); err != nil {
-			t.Fatalf("AfterTool(%d) = %v", index, err)
+		if err := tracker.ObserveToolResult(context.Background(), call, domain.ToolResult{CallID: "call", Output: output}); err != nil {
+			t.Fatalf("ObserveToolResult(%d) = %v", index, err)
 		}
 	}
 	if receipt := tracker.Receipt(nil); receipt.Presented != 2 || len(receipt.ByTool["tool"]) != 2 {
 		t.Fatalf("receipt = %#v", receipt)
 	}
 	var nilTracker *Tracker
-	if err := nilTracker.AfterTool(context.Background(), domain.ToolCall{}, domain.ToolResult{}); err != nil {
+	if err := nilTracker.ObserveToolResult(context.Background(), domain.ToolCall{}, domain.ToolResult{}); err != nil {
 		t.Fatal(err)
 	}
 }

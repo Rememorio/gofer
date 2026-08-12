@@ -307,7 +307,7 @@ func (service *Service) listArtifacts(writer http.ResponseWriter, request *http.
 	}
 	artifacts := make([]artifact.Artifact, 0, len(listed.Entries))
 	for _, entry := range listed.Entries {
-		if entry.Directory {
+		if entry.Directory || threadWorkspace.IsInternalOutputPath(entry.Path) {
 			continue
 		}
 		metadata, inspectErr := artifact.Inspect(threadWorkspace, entry.Path)

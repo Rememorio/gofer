@@ -22,7 +22,7 @@ const sampleBytes = 4096
 
 var excludedDirectoryNames = map[string]struct{}{
 	".browser-frames": {}, ".cache": {}, ".git": {}, ".hg": {}, ".next": {},
-	".svn": {}, ".tool-results": {}, ".venv": {}, "__pycache__": {},
+	".svn": {}, workspace.ProcessOutputDirectory: {}, ".venv": {}, "__pycache__": {},
 	"build": {}, "dist": {}, "node_modules": {},
 }
 
@@ -172,7 +172,7 @@ func (scanner *rootScanner) visit(hostPath string, entry fs.DirEntry, walkErr er
 		return nil
 	}
 	if entry.IsDir() {
-		if ignoredDirectory(entry.Name()) {
+		if ignoredDirectory(entry.Name(), scanner.options.limits.ExcludedDirectoryName) {
 			return fs.SkipDir
 		}
 		return nil
@@ -414,9 +414,11 @@ func matchedPathPattern(pattern, normalized string, parts []string) bool {
 	return false
 }
 
-func ignoredDirectory(name string) bool {
-	_, ignored := excludedDirectoryNames[name]
-	return ignored
+func ignoredDirectory(name, additional string) bool {
+	if _, ignored := excludedDirectoryNames[name]; ignored {
+		return true
+	}
+	return additional != "" && name == additional
 }
 
 func errorsIsNotExist(err error) bool { return err != nil && os.IsNotExist(err) }

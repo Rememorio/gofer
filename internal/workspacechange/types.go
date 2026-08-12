@@ -3,6 +3,7 @@ package workspacechange
 import (
 	"errors"
 	"os"
+	"strings"
 	"sync"
 )
 
@@ -57,6 +58,10 @@ type Limits struct {
 	MaxScannedFiles     int   `json:"max_scanned_files,omitempty"`
 	MaxFileBytesForDiff int64 `json:"max_file_bytes_for_diff,omitempty"`
 	MaxTotalDiffBytes   int64 `json:"max_total_diff_bytes,omitempty"`
+	// ExcludedDirectoryName adds one infrastructure-owned single-segment
+	// directory to the fixed scanner exclusions. It is operational input,
+	// not part of the persisted public limit contract.
+	ExcludedDirectoryName string `json:"-"`
 }
 
 // DefaultLimits returns the DeerFlow-compatible workspace review bounds.
@@ -83,6 +88,10 @@ func (limits Limits) normalized() (Limits, error) {
 	}
 	if limits.MaxTotalDiffBytes == 0 {
 		limits.MaxTotalDiffBytes = defaults.MaxTotalDiffBytes
+	}
+	name := limits.ExcludedDirectoryName
+	if strings.TrimSpace(name) != name || name == "." || name == ".." || strings.ContainsAny(name, "/\\\x00") {
+		return Limits{}, ErrInvalidLimits
 	}
 	return limits, nil
 }

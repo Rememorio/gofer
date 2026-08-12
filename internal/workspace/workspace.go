@@ -30,6 +30,9 @@ const (
 	UploadsRoot = VirtualRoot + "/uploads"
 	// OutputsRoot contains user-facing generated artifacts.
 	OutputsRoot = VirtualRoot + "/outputs"
+	// ProcessOutputDirectory is the default private directory for internal tool
+	// feedback stored beneath OutputsRoot.
+	ProcessOutputDirectory = ".tool-results"
 
 	defaultMaxReadBytes         = 1 << 20
 	defaultMaxWriteBytes        = 80 << 10
@@ -65,31 +68,34 @@ var defaultIgnoredNames = map[string]struct{}{
 
 // Config configures per-thread local workspace storage.
 type Config struct {
-	Root           string
-	MaxReadBytes   int64
-	MaxWriteBytes  int64
-	MaxUploadBytes int64
+	Root                      string
+	MaxReadBytes              int64
+	MaxWriteBytes             int64
+	MaxUploadBytes            int64
+	InternalOutputDirectories []string
 }
 
 // Manager creates isolated thread workspaces beneath one local root.
 type Manager struct {
-	root           string
-	maxReadBytes   int64
-	maxWriteBytes  int64
-	maxUploadBytes int64
+	root                      string
+	maxReadBytes              int64
+	maxWriteBytes             int64
+	maxUploadBytes            int64
+	internalOutputDirectories map[string]struct{}
 }
 
 // Thread is a traversal-resistant view of one thread's user-data tree.
 type Thread struct {
-	id             domain.ThreadID
-	hostRoot       string
-	root           *os.Root
-	maxReadBytes   int64
-	maxWriteBytes  int64
-	maxUploadBytes int64
-	locks          keyedLocks
-	closeOnce      sync.Once
-	closeErr       error
+	id                        domain.ThreadID
+	hostRoot                  string
+	root                      *os.Root
+	maxReadBytes              int64
+	maxWriteBytes             int64
+	maxUploadBytes            int64
+	internalOutputDirectories map[string]struct{}
+	locks                     keyedLocks
+	closeOnce                 sync.Once
+	closeErr                  error
 }
 
 // Entry describes one path without exposing its host location.
@@ -185,6 +191,10 @@ func NewManager(config Config) (*Manager, error) {
 			*limit = defaults[index]
 		}
 	}
+	internalDirectories, err := normalizeInternalOutputDirectories(config.InternalOutputDirectories)
+	if err != nil {
+		return nil, err
+	}
 	absolute, err := filepath.Abs(config.Root)
 	if err != nil {
 		return nil, fmt.Errorf("resolve workspace root: %w", err)
@@ -199,6 +209,7 @@ func NewManager(config Config) (*Manager, error) {
 	return &Manager{
 		root: resolved, maxReadBytes: config.MaxReadBytes,
 		maxWriteBytes: config.MaxWriteBytes, maxUploadBytes: config.MaxUploadBytes,
+		internalOutputDirectories: internalDirectories,
 	}, nil
 }
 
@@ -223,8 +234,20 @@ func (manager *Manager) Open(threadID domain.ThreadID) (*Thread, error) {
 	return &Thread{
 		id: threadID, hostRoot: hostRoot, root: root,
 		maxReadBytes: manager.maxReadBytes, maxWriteBytes: manager.maxWriteBytes,
-		maxUploadBytes: manager.maxUploadBytes,
+		maxUploadBytes:            manager.maxUploadBytes,
+		internalOutputDirectories: manager.internalOutputDirectories,
 	}, nil
+}
+
+func normalizeInternalOutputDirectories(configured []string) (map[string]struct{}, error) {
+	directories := map[string]struct{}{ProcessOutputDirectory: {}}
+	for _, name := range configured {
+		if strings.TrimSpace(name) != name || name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\\x00") {
+			return nil, fmt.Errorf("%w: internal output directories must be single names", ErrInvalidConfig)
+		}
+		directories[name] = struct{}{}
+	}
+	return directories, nil
 }
 
 // Clone copies one complete thread user-data tree into a fresh target. The
@@ -340,6 +363,30 @@ func (manager *Manager) Remove(threadID domain.ThreadID) error {
 
 // ID returns the owning thread identifier.
 func (workspace *Thread) ID() domain.ThreadID { return workspace.id }
+
+// IsInternalOutputPath reports whether virtualPath belongs to an
+// infrastructure-owned output directory that must not be published as an
+// artifact. Internal paths remain directly readable by trusted workspace
+// tools.
+func (workspace *Thread) IsInternalOutputPath(virtualPath string) bool {
+	if workspace == nil {
+		return false
+	}
+	relative, err := normalizeVirtualPath(virtualPath)
+	if err != nil {
+		return false
+	}
+	return workspace.isInternalOutputRelative(relative)
+}
+
+func (workspace *Thread) isInternalOutputRelative(relative string) bool {
+	if !strings.HasPrefix(relative, "outputs/") {
+		return false
+	}
+	name := strings.SplitN(strings.TrimPrefix(relative, "outputs/"), "/", 2)[0]
+	_, internal := workspace.internalOutputDirectories[name]
+	return internal
+}
 
 // ExecutionMounts returns the fixed per-thread directories used by command
 // sandboxes. Uploaded files are mounted read-only; working and output files
@@ -550,7 +597,7 @@ func (workspace *Thread) List(virtualPath string, options ListOptions) (ListResu
 	if err != nil {
 		return ListResult{}, err
 	}
-	collector := listCollector{base: relative, maxDepth: options.MaxDepth, limit: limit}
+	collector := listCollector{base: relative, maxDepth: options.MaxDepth, limit: limit, internal: workspace.isInternalOutputRelative}
 	err = fs.WalkDir(workspace.root.FS(), relative, collector.visit)
 	if err != nil {
 		return ListResult{}, err
@@ -661,6 +708,9 @@ func (workspace *Thread) walkFiles(virtualPath string, visit func(string, string
 				return visit(base, current, item)
 			}
 			return nil
+		}
+		if workspace.isInternalOutputRelative(current) {
+			return skipDirectory(item)
 		}
 		if ignored(item.Name()) {
 			if item.IsDir() {
@@ -946,6 +996,7 @@ type listCollector struct {
 	limit     int
 	entries   []Entry
 	truncated bool
+	internal  func(string) bool
 }
 
 func (collector *listCollector) visit(current string, item fs.DirEntry, walkErr error) error {
@@ -954,6 +1005,9 @@ func (collector *listCollector) visit(current string, item fs.DirEntry, walkErr 
 	}
 	if current == collector.base {
 		return nil
+	}
+	if collector.internal != nil && collector.internal(current) {
+		return skipDirectory(item)
 	}
 	if ignored(item.Name()) {
 		return skipDirectory(item)

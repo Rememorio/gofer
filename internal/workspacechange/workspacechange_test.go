@@ -199,8 +199,9 @@ func TestCaptureExcludesUploadsAndProcessDirectories(t *testing.T) {
 	for _, directory := range []string{"node_modules", ".browser-frames", ".tool-results"} {
 		writeWorkspace(t, thread, workspace.WorkspaceRoot+"/"+directory+"/ignored.txt", "ignored")
 	}
+	writeWorkspace(t, thread, workspace.OutputsRoot+"/custom-results/ignored.txt", "ignored")
 	writeWorkspace(t, thread, workspace.WorkspaceRoot+"/visible.txt", "visible")
-	snapshot, err := Capture(thread, Limits{})
+	snapshot, err := Capture(thread, Limits{ExcludedDirectoryName: "custom-results"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,6 +219,12 @@ func TestCompareAndCaptureValidation(t *testing.T) {
 	}
 	if _, err := Capture(thread, Limits{MaxFiles: -1}); !errors.Is(err, ErrInvalidLimits) {
 		t.Fatalf("Capture(invalid) = %v", err)
+	}
+	if _, err := Capture(thread, Limits{ExcludedDirectoryName: "nested/results"}); !errors.Is(err, ErrInvalidLimits) {
+		t.Fatalf("Capture(invalid exclusion) = %v", err)
+	}
+	if _, err := Capture(thread, Limits{ExcludedDirectoryName: " cache"}); !errors.Is(err, ErrInvalidLimits) {
+		t.Fatalf("Capture(spaced exclusion) = %v", err)
 	}
 	if _, err := CompareCurrent(thread, nil, Limits{}); !errors.Is(err, ErrInvalidWorkspace) {
 		t.Fatalf("CompareCurrent(nil) = %v", err)

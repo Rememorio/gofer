@@ -15,7 +15,7 @@ func (service *Service) deliveryFinishHook(thread *workspace.Thread, baseline *w
 	return runtime.FinishFunc(func(ctx context.Context, writer runtime.EventWriter) error {
 		var producedPaths []string
 		if baseline != nil {
-			result, changedOutputs, err := workspacechange.ReviewCurrent(thread, baseline, workspacechange.Limits{})
+			result, changedOutputs, err := workspacechange.ReviewCurrent(thread, baseline, service.workspaceChangeLimits())
 			if err != nil {
 				service.logger.Warn("workspace change capture failed", "run_id", runID, "error", err)
 			} else {
@@ -30,6 +30,10 @@ func (service *Service) deliveryFinishHook(thread *workspace.Thread, baseline *w
 		}
 		return delivery.CompletionError(receipt, persistErr)
 	})
+}
+
+func (service *Service) workspaceChangeLimits() workspacechange.Limits {
+	return workspacechange.Limits{ExcludedDirectoryName: service.config.ToolOutput.StorageSubdir}
 }
 
 func (service *Service) recordWorkspaceReview(ctx context.Context, writer runtime.EventWriter, runID domain.RunID, result workspacechange.Result) {

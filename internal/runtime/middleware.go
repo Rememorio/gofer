@@ -16,6 +16,21 @@ type Middleware interface {
 	AfterTool(context.Context, domain.ToolCall, domain.ToolResult) error
 }
 
+// ToolResultObserver optionally inspects the unmodified result returned by a
+// tool. Observers run before result transformers and durable persistence, so
+// bookkeeping middleware can retain structured facts that a context-budget
+// transformer may subsequently replace with a compact synopsis.
+type ToolResultObserver interface {
+	ObserveToolResult(context.Context, domain.ToolCall, domain.ToolResult) error
+}
+
+// ToolResultTransformer optionally replaces a tool result before it is added
+// to the durable journal or a later model request. Transformers run serially
+// in middleware registration order.
+type ToolResultTransformer interface {
+	TransformToolResult(context.Context, domain.ToolCall, domain.ToolResult) (domain.ToolResult, error)
+}
+
 // NopMiddleware provides no-op implementations for selective embedding.
 type NopMiddleware struct{}
 

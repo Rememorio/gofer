@@ -41,6 +41,7 @@ import (
 	"github.com/Rememorio/gofer/internal/subagent"
 	"github.com/Rememorio/gofer/internal/tool"
 	"github.com/Rememorio/gofer/internal/tool/builtin"
+	"github.com/Rememorio/gofer/internal/tooloutput"
 	"github.com/Rememorio/gofer/internal/workspace"
 	"github.com/Rememorio/gofer/internal/workspacechange"
 )
@@ -112,6 +113,7 @@ func (service *Service) open() error {
 	service.workspaces, err = workspace.NewManager(workspace.Config{
 		Root: service.config.Workspace.Root, MaxReadBytes: service.config.Workspace.MaxReadBytes,
 		MaxWriteBytes: service.config.Workspace.MaxWriteBytes, MaxUploadBytes: service.config.Workspace.MaxUploadBytes,
+		InternalOutputDirectories: []string{service.config.ToolOutput.StorageSubdir},
 	})
 	if err != nil {
 		return err
@@ -434,7 +436,7 @@ func (service *Service) execute(ctx context.Context, launch gateway.StartRequest
 		return
 	}
 	defer func() { _ = threadWorkspace.Close() }()
-	baseline, captureErr := workspacechange.Capture(threadWorkspace, workspacechange.Limits{})
+	baseline, captureErr := workspacechange.Capture(threadWorkspace, service.workspaceChangeLimits())
 	if captureErr != nil {
 		service.logger.Warn("workspace baseline capture failed", "run_id", launch.RunID, "error", captureErr)
 	} else {
@@ -513,7 +515,7 @@ func (service *Service) buildTools(threadWorkspace *workspace.Thread, launch gat
 		_ = children.Close()
 		return nil, nil, nil, err
 	}
-	middleware, err := service.runtimeMiddleware(launch.ThreadID, provider)
+	middleware, err := service.runtimeMiddleware(launch.ThreadID, provider, threadWorkspace)
 	if err != nil {
 		_ = children.Close()
 		return nil, nil, nil, err
@@ -566,7 +568,7 @@ func (service *Service) registerExtensionTools(registry *tool.Registry, threadID
 	return nil
 }
 
-func (service *Service) runtimeMiddleware(threadID domain.ThreadID, provider configuredProvider) ([]runtime.Middleware, error) {
+func (service *Service) runtimeMiddleware(threadID domain.ThreadID, provider configuredProvider, threadWorkspace *workspace.Thread) ([]runtime.Middleware, error) {
 	descriptors := mergeDescriptors(builtin.PolicyDescriptors(), control.PolicyDescriptors(), sandbox.PolicyDescriptors())
 	if service.browser != nil {
 		descriptors = mergeDescriptors(descriptors, browser.PolicyDescriptors())
@@ -583,7 +585,11 @@ func (service *Service) runtimeMiddleware(threadID domain.ThreadID, provider con
 	if err != nil {
 		return nil, err
 	}
-	middleware := []runtime.Middleware{policyMiddleware}
+	budget, err := tooloutput.New(toolOutputConfig(service.config.ToolOutput), threadWorkspace)
+	if err != nil {
+		return nil, err
+	}
+	middleware := []runtime.Middleware{policyMiddleware, budget}
 	if service.memories != nil {
 		memoryMiddleware, memoryErr := memory.NewMiddleware(memory.MiddlewareConfig{
 			Store: service.memories, Scope: memoryScope(threadID), Limit: service.config.Memory.Limit,
@@ -604,6 +610,16 @@ func (service *Service) runtimeMiddleware(threadID domain.ThreadID, provider con
 		return nil, err
 	}
 	return append(middleware, compactor), nil
+}
+
+func toolOutputConfig(source config.ToolOutputConfig) tooloutput.Config {
+	return tooloutput.Config{
+		Enabled: source.Enabled, ExternalizeMinChars: source.ExternalizeMinChars,
+		PreviewHeadChars: source.PreviewHeadChars, PreviewTailChars: source.PreviewTailChars,
+		FallbackMaxChars: source.FallbackMaxChars, FallbackHeadChars: source.FallbackHeadChars,
+		FallbackTailChars: source.FallbackTailChars, StorageSubdir: source.StorageSubdir,
+		ExemptTools: append([]string(nil), source.ExemptTools...), ToolOverrides: source.ToolOverrides,
+	}
 }
 
 func memoryScope(threadID domain.ThreadID) memory.ScopeProvider {

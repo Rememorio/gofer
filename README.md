@@ -55,6 +55,13 @@ Terminal `run.delivery` receipts attribute presented artifacts by tool and
 verify that every successful run which changed outputs explicitly delivered at
 least one matching file. Missing or unverifiable delivery becomes a durable
 run failure instead of silently stranding an output on disk.
+Oversized tool results are kept out of both durable conversation history and
+later model turns. Gofer atomically stores the complete result under the
+thread's private `.tool-results` output directory and substitutes a typed,
+bounded synopsis with a `read_file` reference; a strict head-and-tail fallback
+applies when persistence is unavailable. Delivery and workspace review inspect
+the original result where necessary but never count these spill files as user
+artifacts.
 The `gofer serve` command now assembles the model provider, durable store,
 isolated workspaces, sandbox, browser, policy, runtime, gateway, graceful
 shutdown, and Prometheus endpoint into a runnable service. MCP tools, projected
@@ -89,6 +96,8 @@ The long-running task primitives are documented in
 HTTP contracts and persistence behavior are documented in
 [Gateway and persistence](docs/gateway.md).
 Operational boundaries are documented in [Service control plane](docs/control-plane.md).
+Tool result externalization and fallback behavior are documented in
+[Tool output budgets](docs/tool-output.md).
 
 ## Development
 

@@ -70,6 +70,22 @@ func TestCatalogValidation(t *testing.T) {
 	if _, err := catalog.Present(context.Background(), thread, []string{workspace.OutputsRoot}, at); !errors.Is(err, ErrInvalidArtifact) {
 		t.Fatalf("Present(directory) error = %v, want ErrInvalidArtifact", err)
 	}
+	internalPath := workspace.OutputsRoot + "/" + workspace.ProcessOutputDirectory + "/raw.txt"
+	if err := thread.WriteFile(internalPath, []byte("private"), false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.Present(context.Background(), thread, []string{internalPath}, at); !errors.Is(err, ErrInvalidArtifact) {
+		t.Fatalf("Present(internal) error = %v, want ErrInvalidArtifact", err)
+	}
+	if _, err := Inspect(thread, internalPath); !errors.Is(err, ErrInvalidArtifact) {
+		t.Fatalf("Inspect(internal) error = %v, want ErrInvalidArtifact", err)
+	}
+	if _, _, err := OpenFile(thread, internalPath); !errors.Is(err, ErrInvalidArtifact) {
+		t.Fatalf("OpenFile(internal) error = %v, want ErrInvalidArtifact", err)
+	}
+	if _, _, err := catalog.Open(thread, internalPath); !errors.Is(err, ErrInvalidArtifact) {
+		t.Fatalf("Open(internal) error = %v, want ErrInvalidArtifact", err)
+	}
 	if _, _, err := catalog.Open(thread, workspace.OutputsRoot+"/missing"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Open(missing) error = %v, want ErrNotFound", err)
 	}
