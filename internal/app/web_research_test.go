@@ -38,7 +38,7 @@ func TestServiceAssemblesConfiguredWebResearchTools(t *testing.T) {
 	}
 	defer func() { _ = threadWorkspace.Close() }()
 	run, _ := domain.NewRun(thread.ID, time.Now())
-	registry, _, children, err := service.buildTools(
+	registry, _, children, err := service.buildTools(context.Background(),
 		threadWorkspace,
 		gateway.StartRequest{RunID: run.ID, ThreadID: thread.ID},
 		service.providers["primary"],

@@ -415,10 +415,14 @@ func (provider *WeCom) normalize(frame weComFrame) (Message, weComRoute, bool) {
 	}
 	userID := strings.TrimSpace(body.From.UserID)
 	messageID := firstString(body.MessageID, frame.Headers.MessageID, frame.Headers.RequestID)
-	if userID == "" || messageID == "" || frame.Headers.RequestID == "" || !allowed(provider.allowedUsers, userID) {
+	if userID == "" || messageID == "" || frame.Headers.RequestID == "" {
 		return Message{}, weComRoute{}, false
 	}
 	text, attachments := parseWeComBody(messageID, body)
+	_, connecting := ParseConnectCommand(text, WeComProvider)
+	if !connecting && !allowed(provider.allowedUsers, userID) {
+		return Message{}, weComRoute{}, false
+	}
 	if text == "" && len(attachments) == 0 {
 		return Message{}, weComRoute{}, false
 	}

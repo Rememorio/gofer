@@ -202,10 +202,14 @@ func (provider *DingTalk) normalize(data *chatbot.BotCallbackDataModel) (Message
 	if conversationType == dingTalkConversationGroup {
 		chatID = conversationID
 	}
-	if userID == "" || messageID == "" || chatID == "" || !allowed(provider.allowedUsers, userID) {
+	if userID == "" || messageID == "" || chatID == "" {
 		return Message{}, dingTalkRoute{}, false
 	}
 	text, attachments := parseDingTalkContent(data)
+	_, connecting := ParseConnectCommand(text, DingTalkProvider)
+	if !connecting && !allowed(provider.allowedUsers, userID) {
+		return Message{}, dingTalkRoute{}, false
+	}
 	if text == "" && len(attachments) == 0 {
 		return Message{}, dingTalkRoute{}, false
 	}

@@ -341,8 +341,17 @@ func (provider *Slack) handleEvent(ctx context.Context, submit SubmitFunc, raw j
 
 func (provider *Slack) normalize(payload slackEventPayload) (Message, bool) {
 	event := payload.Event
-	if event.Type != "message" && event.Type != "app_mention" || event.BotID != "" || event.Subtype != "" || !allowed(provider.allowedUsers, event.User) {
+	if event.Type != "message" && event.Type != "app_mention" || event.BotID != "" || event.Subtype != "" {
 		return Message{}, false
+	}
+	if !allowed(provider.allowedUsers, event.User) {
+		candidate := strings.TrimSpace(event.Text)
+		if event.Type == "app_mention" {
+			candidate = stripSlackMention(candidate, provider.botUserID)
+		}
+		if _, connecting := ParseConnectCommand(candidate, SlackProvider); !connecting {
+			return Message{}, false
+		}
 	}
 	text := strings.TrimSpace(event.Text)
 	if event.Type == "app_mention" {

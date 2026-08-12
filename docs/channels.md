@@ -26,11 +26,41 @@ the claim until expiry; an authentication, run, or send failure releases it so
 a provider retry can recover. This behavior survives process restarts when a
 SQL store is configured.
 
+Users may create a provider-scoped, single-use connection code through the
+authenticated API and send it to a bot with `/connect`. Telegram also accepts
+`/start` and can return a `t.me` deep link when `bot_username` is configured.
+Codes expire after ten minutes, are consumed atomically with binding creation,
+and are capped at five pending codes per user and provider. The code determines
+the Gofer owner; provider-authenticated message metadata determines the external
+identity, so a sender cannot claim either side of the binding.
+
 The manager also provides two separate concurrency controls:
 
 - a bounded queue prevents webhook bursts from creating unbounded goroutines;
 - a keyed lock serializes turns for one conversation while unrelated chats can
   run concurrently.
+
+## Commands
+
+Every chat provider recognizes the same position-sensitive control commands.
+Platform mention tokens may precede a command, and Telegram's `/command@bot`
+form is accepted.
+
+| Command | Behavior |
+| --- | --- |
+| `/bootstrap [request]` | Starts an agent turn with trusted bootstrap context. |
+| `/new` | Atomically remaps the current topic to a fresh durable thread. |
+| `/status` | Reports the mapped thread, if any. |
+| `/models` | Lists configured model aliases. |
+| `/memory` | Reports the caller's long-term-memory status. |
+| `/goal [text\|off]` | Reads, replaces, or clears the conversation goal. |
+| `/help` | Lists commands and slash-skill activation. |
+| `/<skill-name> [request]` | Routes through an installed, enabled skill. |
+
+The authenticated platform sender is exposed to shell tools as
+`DEERFLOW_CHANNEL_USER_ID` and `GOFER_CHANNEL_USER_ID`. These variables come
+only from the adapter's trusted request context; user-provided run metadata
+cannot populate or override them.
 
 ## Native providers
 
@@ -370,11 +400,25 @@ and materialize attachments through Gofer's upload boundary before dispatch.
 
 ## Connection API
 
-When channels are enabled, authenticated clients can inspect and manage their
-own bindings:
+When channels are enabled, authenticated clients can inspect providers, issue
+binding codes, and manage their own connections:
 
 ```text
 GET    /api/channels
+GET    /api/channels/providers
+GET    /api/channels/connections
+POST   /api/channels/{provider}/connect
+DELETE /api/channels/connections/{connection_id}
+```
+
+The connect response contains the provider, mode, single-use code, instruction,
+expiry in seconds, and an optional Telegram deep-link URL. A provider user then
+sends `/connect CODE` (or Telegram `/start CODE`) to complete the binding.
+
+The original operator-oriented aliases remain available for direct bootstrap
+and compatibility:
+
+```text
 GET    /api/channel-connections
 POST   /api/channel-connections
 DELETE /api/channel-connections/{connection_id}

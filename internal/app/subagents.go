@@ -31,9 +31,9 @@ func subagentFinishHook(manager *subagent.Manager) runtime.FinishHook {
 	})
 }
 
-func (service *Service) newSubagents(threadWorkspace *workspace.Thread, launch gateway.StartRequest, provider configuredProvider, observers []runtime.Middleware) (*subagent.Manager, error) {
+func (service *Service) newSubagents(ctx context.Context, threadWorkspace *workspace.Thread, launch gateway.StartRequest, provider configuredProvider, observers []runtime.Middleware) (*subagent.Manager, error) {
 	parallel := min(service.config.Runtime.MaxParallelTools, service.config.Runtime.MaxSubagents)
-	return subagent.NewManager(service.ctx, subagent.Config{
+	return subagent.NewManager(ctx, subagent.Config{
 		Executor: childExecutor{
 			service: service, workspace: threadWorkspace, launch: launch, provider: provider,
 			observers: append([]runtime.Middleware(nil), observers...),

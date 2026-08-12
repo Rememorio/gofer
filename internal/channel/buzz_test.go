@@ -122,7 +122,7 @@ func TestBuzzNIP42AuthAndTrustedRelayEvents(t *testing.T) {
 func TestBuzzMentionAllowlistEngagementAndWatermarkPolicy(t *testing.T) {
 	t.Parallel()
 	now := time.Unix(1_800_000_000, 0).UTC()
-	author, blocked := mustBuzzKeys(t, buzzAuthorSecret), mustBuzzKeys(t, buzzTestSecret)
+	author, blocked := mustBuzzKeys(t, buzzAuthorSecret), mustBuzzKeys(t, buzzBlockedSecret)
 	provider := newBuzzTestProvider(t, now, []string{author.Public})
 	provider.mu.Lock()
 	provider.metadata["channel"] = buzzChannelMetadata{Type: "stream"}
@@ -151,6 +151,13 @@ func TestBuzzMentionAllowlistEngagementAndWatermarkPolicy(t *testing.T) {
 	unauthorized, _ := buzzChatEvent(blocked, "channel", "@Gofer attack", now, "", provider.keys.Public)
 	_ = provider.handleChatEvent(context.Background(), submit, unauthorized)
 	assertNoBuzzMessage(t, submitted)
+	connecting, _ := buzzChatEvent(blocked, "channel", "/connect code", now, "")
+	if err := provider.handleChatEvent(context.Background(), submit, connecting); err != nil {
+		t.Fatal(err)
+	}
+	if message := waitBuzzMessage(t, submitted); message.Text != "/connect code" {
+		t.Fatalf("disallowed connect = %#v", message)
+	}
 	provider.advanceWatermark("channel", now.Add(2*buzzMaxFutureSkew).Unix())
 	provider.mu.Lock()
 	watermark := provider.watermarks["channel"]

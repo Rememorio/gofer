@@ -99,6 +99,12 @@ type Dedupe interface {
 	Complete(context.Context, string, bool) error
 }
 
+// Connector atomically consumes a one-time code and binds the authenticated
+// provider identity carried by its inbound message.
+type Connector interface {
+	Connect(context.Context, string, ConnectionIdentity, time.Time) (Binding, error)
+}
+
 // MemoryDedupe is a concurrency-safe TTL idempotency store.
 type MemoryDedupe struct {
 	mu      sync.Mutex
@@ -159,6 +165,7 @@ type Config struct {
 	Resolver          IdentityResolver
 	Dispatcher        Dispatcher
 	Dedupe            Dedupe
+	Connector         Connector
 	MaxInflight       int
 	QueueCapacity     int
 	DedupeTTL         time.Duration
@@ -172,6 +179,7 @@ type Manager struct {
 	resolver          IdentityResolver
 	dispatcher        Dispatcher
 	dedupe            Dedupe
+	connector         Connector
 	slots             chan struct{}
 	workers           int
 	queue             chan Message
@@ -213,7 +221,8 @@ func NewManager(config Config) (*Manager, error) {
 	}
 	return &Manager{
 		resolver: config.Resolver, dispatcher: config.Dispatcher, dedupe: config.Dedupe,
-		slots: make(chan struct{}, config.MaxInflight), workers: config.MaxInflight,
+		connector: config.Connector,
+		slots:     make(chan struct{}, config.MaxInflight), workers: config.MaxInflight,
 		queue: make(chan Message, config.QueueCapacity), ttl: config.DedupeTTL, now: config.Now,
 		onError: config.OnError, unauthorizedReply: strings.TrimSpace(config.UnauthorizedReply),
 		senders: make(map[string]Sender), locks: make(map[string]*conversationLock), done: make(chan struct{}),
@@ -266,6 +275,10 @@ func (manager *Manager) Handle(ctx context.Context, message Message) error {
 	}
 	success := false
 	defer func() { _ = manager.dedupe.Complete(context.WithoutCancel(ctx), key, success) }()
+	if handled, complete, connectErr := manager.handleConnect(ctx, message); handled {
+		success = complete
+		return connectErr
+	}
 	select {
 	case manager.slots <- struct{}{}:
 		defer func() { <-manager.slots }()
@@ -296,6 +309,41 @@ func (manager *Manager) Handle(ctx context.Context, message Message) error {
 	}
 	success = true
 	return nil
+}
+
+func (manager *Manager) handleConnect(ctx context.Context, message Message) (bool, bool, error) {
+	if !ConnectableProvider(message.Provider) {
+		return false, false, nil
+	}
+	code, attempted := ParseConnectCommand(message.Text, message.Provider)
+	if !attempted || manager.connector == nil {
+		return false, false, nil
+	}
+	providerName := channelDisplayName(message.Provider)
+	replyText := providerName + " connection code is invalid or expired."
+	connected := false
+	if code != "" {
+		identity := ConnectionIdentity{
+			Provider: message.Provider, WorkspaceID: message.WorkspaceID,
+			WorkspaceName:    firstMetadata(message.Metadata, "workspace_name", "team_name", "guild_name"),
+			ExternalUserID:   message.ExternalUserID,
+			ExternalUserName: firstMetadata(message.Metadata, "external_user_name", "display_name", "username"),
+		}
+		_, err := manager.connector.Connect(ctx, code, identity, manager.now())
+		switch {
+		case err == nil:
+			connected = true
+			replyText = providerName + " connected to Gofer."
+		case errors.Is(err, ErrNotFound), errors.Is(err, ErrInvalid):
+		default:
+			replyText = providerName + " connection could not be completed from this message."
+			if manager.onError != nil {
+				manager.onError(cloneMessage(message), err)
+			}
+		}
+	}
+	sendErr := manager.send(ctx, routedReply(message, Reply{Text: replyText}))
+	return true, connected || sendErr == nil, sendErr
 }
 
 func (manager *Manager) send(ctx context.Context, reply Reply) error {
@@ -555,6 +603,41 @@ func normalizeMessage(message Message) Message {
 	message.ReceivedAt = message.ReceivedAt.UTC()
 	return message
 }
+
+func firstMetadata(metadata map[string]string, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(metadata[key]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func channelDisplayName(provider string) string {
+	switch normalizeProvider(provider) {
+	case SlackProvider:
+		return "Slack"
+	case TelegramProvider:
+		return "Telegram"
+	case DiscordProvider:
+		return "Discord"
+	case FeishuProvider:
+		return "Feishu"
+	case DingTalkProvider:
+		return "DingTalk"
+	case WeComProvider:
+		return "WeCom"
+	case WeChatProvider:
+		return "WeChat"
+	case BuzzProvider:
+		return "Buzz"
+	case githubProvider:
+		return "GitHub"
+	default:
+		return strings.ToUpper(provider)
+	}
+}
+
 func cloneMessage(message Message) Message {
 	message.Attachments = append([]Attachment(nil), message.Attachments...)
 	message.Metadata = cloneMap(message.Metadata)

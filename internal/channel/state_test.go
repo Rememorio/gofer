@@ -89,6 +89,45 @@ func TestMemoryStateConversationFirstWriterAndCleanup(t *testing.T) {
 	}
 }
 
+func TestMemoryStateConnectCodeLifecycle(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	state := NewMemoryState()
+	now := time.Now().UTC()
+	code, err := state.IssueConnectCode(ctx, "alice", "slack", now, ConnectCodeTTL, 1)
+	if err != nil || code.UserID != "alice" || code.Provider != "slack" || !code.ExpiresAt.Equal(now.Add(ConnectCodeTTL)) {
+		t.Fatalf("IssueConnectCode() = %#v, %v", code, err)
+	}
+	if _, err = state.IssueConnectCode(ctx, "alice", "slack", now, ConnectCodeTTL, 1); !errors.Is(err, ErrBusy) {
+		t.Fatalf("second IssueConnectCode() = %v", err)
+	}
+	identity := ConnectionIdentity{
+		Provider: "slack", WorkspaceID: "team", WorkspaceName: "Team",
+		ExternalUserID: "U1", ExternalUserName: "Alice",
+	}
+	if _, err = state.Connect(ctx, code.Code, ConnectionIdentity{Provider: "discord", ExternalUserID: "U1"}, now); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("wrong-provider Connect() = %v", err)
+	}
+	bound, err := state.Connect(ctx, code.Code, identity, now)
+	if err != nil || bound.UserID != "alice" || bound.ExternalUserName != "Alice" {
+		t.Fatalf("Connect() = %#v, %v", bound, err)
+	}
+	if _, err = state.Connect(ctx, code.Code, identity, now); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("reused Connect() = %v", err)
+	}
+	if resolved, resolveErr := state.Resolve(ctx, "slack", "team", "U1"); resolveErr != nil || resolved.UserID != "alice" {
+		t.Fatalf("Resolve(connected) = %#v, %v", resolved, resolveErr)
+	}
+
+	expired, err := state.IssueConnectCode(ctx, "bob", "slack", now, time.Minute, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = state.Connect(ctx, expired.Code, ConnectionIdentity{Provider: "slack", ExternalUserID: "U2"}, now.Add(time.Minute)); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expired Connect() = %v", err)
+	}
+}
+
 func TestChannelStateValidationAndCancellation(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UTC()

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,10 +18,28 @@ import (
 	"github.com/Rememorio/gofer/internal/event"
 	"github.com/Rememorio/gofer/internal/gateway"
 	"github.com/Rememorio/gofer/internal/humaninput"
+	"github.com/Rememorio/gofer/internal/memory"
+	"github.com/Rememorio/gofer/internal/skill"
 	"github.com/Rememorio/gofer/internal/store"
 )
 
-const channelWaitPollInterval = 100 * time.Millisecond
+const (
+	channelWaitPollInterval = 100 * time.Millisecond
+	channelBootstrapPrompt  = "This is a bootstrap session. Help the user initialize the workspace and persistent agent profile. Prefer the enabled bootstrap skill when available."
+)
+
+type channelContextKey uint8
+
+const (
+	channelBootstrapContextKey channelContextKey = iota
+	channelUserContextKey
+	channelSkillContextKey
+)
+
+type channelSkillActivation struct {
+	Name         string
+	Instructions string
+}
 
 type channelDispatcher struct {
 	service *Service
@@ -40,6 +59,7 @@ func (service *Service) openChannels() error {
 	}
 	manager, err := channel.NewManager(channel.Config{
 		Resolver: state, Dispatcher: channelDispatcher{service: service, state: state}, Dedupe: state,
+		Connector:   state,
 		MaxInflight: service.config.Channels.MaxInflight, QueueCapacity: service.config.Channels.QueueCapacity,
 		DedupeTTL:         time.Duration(service.config.Channels.DedupeTTLSeconds) * time.Second,
 		UnauthorizedReply: service.config.Channels.UnauthorizedReply,
@@ -294,6 +314,18 @@ func (service *Service) openWebhookChannel(manager *channel.Manager) error {
 }
 
 func (dispatcher channelDispatcher) Dispatch(ctx context.Context, request channel.Request) (channel.Reply, error) {
+	if command, ok := channel.ParseCommand(request.Message.Text); ok {
+		return dispatcher.dispatchCommand(ctx, request, command)
+	}
+	commandText := channel.StripLeadingMentions(request.Message.Text)
+	if strings.HasPrefix(commandText, "/") {
+		request.Message.Text = commandText
+		return dispatcher.dispatchSlashSkill(ctx, request)
+	}
+	return dispatcher.dispatchAgent(ctx, request)
+}
+
+func (dispatcher channelDispatcher) dispatchAgent(ctx context.Context, request channel.Request) (channel.Reply, error) {
 	threadID, err := dispatcher.ensureThread(ctx, request)
 	if err != nil {
 		return channel.Reply{}, err
@@ -308,9 +340,17 @@ func (dispatcher channelDispatcher) Dispatch(ctx context.Context, request channe
 	if err != nil {
 		return channel.Reply{}, err
 	}
-	draft, err := event.NewDraft(threadID, run.ID, event.RunCreated, time.Now(), map[string]any{
+	runMetadata := map[string]any{
 		"source": "channel", "provider": request.Message.Provider, "message_id": request.Message.ID,
-	})
+		"channel_user_id": request.Message.ExternalUserID,
+	}
+	if channelBootstrap(ctx) {
+		runMetadata["is_bootstrap"] = true
+	}
+	if activation, ok := channelSkill(ctx); ok {
+		runMetadata["skill"] = activation.Name
+	}
+	draft, err := event.NewDraft(threadID, run.ID, event.RunCreated, time.Now(), cloneAnyMap(runMetadata))
 	if err == nil {
 		_, err = dispatcher.service.store.Append(ctx, run.ID, 0, draft)
 	}
@@ -326,10 +366,11 @@ func (dispatcher channelDispatcher) Dispatch(ctx context.Context, request channe
 		RunID: run.ID, ThreadID: threadID,
 		Request: gateway.RunRequest{
 			AssistantID: assistantID, Input: input,
-			Metadata: map[string]any{"source": "channel", "provider": request.Message.Provider, "message_id": request.Message.ID},
+			Metadata: cloneAnyMap(runMetadata),
 		},
 	}
 	launchContext := auth.WithPrincipal(ctx, auth.Principal{ID: request.Identity.UserID, Permissions: []auth.Permission{auth.Admin}})
+	launchContext = context.WithValue(launchContext, channelUserContextKey, request.Message.ExternalUserID)
 	if err = dispatcher.service.Start(launchContext, launch); err != nil {
 		dispatcher.service.failPending(launch, err)
 		return channel.Reply{}, err
@@ -340,6 +381,189 @@ func (dispatcher channelDispatcher) Dispatch(ctx context.Context, request channe
 	}
 	return dispatcher.reply(ctx, run)
 }
+
+func (dispatcher channelDispatcher) dispatchCommand(ctx context.Context, request channel.Request, command channel.Command) (channel.Reply, error) {
+	switch command.Name {
+	case channel.CommandBootstrap:
+		request.Message.Text = command.Args
+		if request.Message.Text == "" {
+			request.Message.Text = "Initialize workspace"
+		}
+		return dispatcher.dispatchAgent(context.WithValue(ctx, channelBootstrapContextKey, true), request)
+	case channel.CommandNew:
+		_, err := dispatcher.freshThread(ctx, request)
+		if err != nil {
+			return channel.Reply{}, err
+		}
+		return channel.Reply{Text: "New conversation started."}, nil
+	case channel.CommandStatus:
+		threadID, found, err := dispatcher.mappedThread(ctx, request)
+		if err != nil {
+			return channel.Reply{}, err
+		}
+		if !found {
+			return channel.Reply{Text: "No active conversation."}, nil
+		}
+		return channel.Reply{Text: "Active thread: " + string(threadID)}, nil
+	case channel.CommandModels:
+		return channel.Reply{Text: dispatcher.modelList()}, nil
+	case channel.CommandMemory:
+		return dispatcher.memoryStatus(ctx, request.Identity.UserID)
+	case channel.CommandGoal:
+		return dispatcher.goalCommand(ctx, request, command.Args)
+	case channel.CommandHelp:
+		return channel.Reply{Text: channelCommandHelp}, nil
+	default:
+		return channel.Reply{Text: unknownChannelCommand(request.Message.Text)}, nil
+	}
+}
+
+func (dispatcher channelDispatcher) dispatchSlashSkill(ctx context.Context, request channel.Request) (channel.Reply, error) {
+	fields := strings.Fields(request.Message.Text)
+	if len(fields) == 0 || dispatcher.service.skills == nil {
+		return channel.Reply{Text: unknownChannelCommand(request.Message.Text)}, nil
+	}
+	name := strings.TrimPrefix(strings.ToLower(fields[0]), "/")
+	if at := strings.IndexByte(name, '@'); at > 0 {
+		name = name[:at]
+	}
+	metadata, err := dispatcher.service.skills.Get(name)
+	if errors.Is(err, skill.ErrNotFound) {
+		return channel.Reply{Text: unknownChannelCommand(request.Message.Text)}, nil
+	}
+	if err != nil {
+		return channel.Reply{}, err
+	}
+	if !metadata.Enabled {
+		return channel.Reply{Text: "Skill `/" + name + "` is installed but disabled. Enable it before using slash activation."}, nil
+	}
+	document, err := dispatcher.service.skills.Load(ctx, name)
+	if err != nil {
+		return channel.Reply{}, err
+	}
+	activation := channelSkillActivation{Name: name, Instructions: document}
+	return dispatcher.dispatchAgent(context.WithValue(ctx, channelSkillContextKey, activation), request)
+}
+
+func (dispatcher channelDispatcher) modelList() string {
+	names := make([]string, 0, len(dispatcher.service.config.Models))
+	for _, configured := range dispatcher.service.config.Models {
+		names = append(names, configured.Name)
+	}
+	if len(names) == 0 {
+		return "No models configured."
+	}
+	return "Available models:\n• " + strings.Join(names, "\n• ")
+}
+
+func (dispatcher channelDispatcher) memoryStatus(ctx context.Context, userID string) (channel.Reply, error) {
+	if dispatcher.service.memories == nil {
+		return channel.Reply{Text: "Memory contains 0 fact(s)."}, nil
+	}
+	matches, err := dispatcher.service.memories.Search(ctx, memory.Query{
+		Scope: memory.Scope{UserID: userID}, Limit: 100, Now: time.Now().UTC(),
+	})
+	if err != nil {
+		return channel.Reply{}, err
+	}
+	return channel.Reply{Text: fmt.Sprintf("Memory contains %d fact(s).", len(matches))}, nil
+}
+
+func (dispatcher channelDispatcher) goalCommand(ctx context.Context, request channel.Request, arguments string) (channel.Reply, error) {
+	threadID, found, err := dispatcher.mappedThread(ctx, request)
+	if err != nil {
+		return channel.Reply{}, err
+	}
+	arguments = strings.TrimSpace(arguments)
+	if arguments == "" {
+		return dispatcher.goalStatus(ctx, threadID, found)
+	}
+	if isGoalClear(arguments) {
+		return dispatcher.clearGoal(ctx, threadID, found)
+	}
+	if len([]rune(arguments)) > 4000 {
+		return channel.Reply{Text: "Goal objective must be at most 4000 characters."}, nil
+	}
+	return dispatcher.setGoal(ctx, request, threadID, found, arguments)
+}
+
+func (dispatcher channelDispatcher) goalStatus(ctx context.Context, threadID domain.ThreadID, found bool) (channel.Reply, error) {
+	if !found {
+		return channel.Reply{Text: "No active goal."}, nil
+	}
+	state, err := dispatcher.service.controls.Snapshot(ctx, threadID)
+	if err != nil {
+		return channel.Reply{}, err
+	}
+	if state.Goal == nil {
+		return channel.Reply{Text: "No active goal."}, nil
+	}
+	return channel.Reply{Text: "Goal: " + state.Goal.Objective}, nil
+}
+
+func (dispatcher channelDispatcher) clearGoal(ctx context.Context, threadID domain.ThreadID, found bool) (channel.Reply, error) {
+	if !found {
+		return channel.Reply{Text: "Goal cleared."}, nil
+	}
+	if err := dispatcher.ensureThreadIdle(ctx, threadID); err != nil {
+		return channel.Reply{}, err
+	}
+	if _, err := dispatcher.service.controls.ClearGoal(ctx, threadID); err != nil {
+		return channel.Reply{}, err
+	}
+	return channel.Reply{Text: "Goal cleared."}, nil
+}
+
+func (dispatcher channelDispatcher) setGoal(ctx context.Context, request channel.Request, threadID domain.ThreadID, found bool, objective string) (channel.Reply, error) {
+	var err error
+	if !found {
+		threadID, err = dispatcher.ensureThread(ctx, request)
+		if err != nil {
+			return channel.Reply{}, err
+		}
+	}
+	if err = dispatcher.ensureThreadIdle(ctx, threadID); err != nil {
+		return channel.Reply{}, err
+	}
+	if _, err = dispatcher.service.controls.SetGoal(ctx, threadID, objective, 0); err != nil {
+		return channel.Reply{}, err
+	}
+	request.Message.Text = objective
+	return dispatcher.dispatchAgent(ctx, request)
+}
+
+func isGoalClear(arguments string) bool {
+	switch strings.ToLower(strings.TrimSpace(arguments)) {
+	case "clear", "reset", "off":
+		return true
+	default:
+		return false
+	}
+}
+
+func unknownChannelCommand(text string) string {
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return "Unknown command. Available commands: " + strings.Join(channelCommandNames(), " | ")
+	}
+	return "Unknown command: " + fields[0] + ". Available commands: " + strings.Join(channelCommandNames(), " | ")
+}
+
+func channelCommandNames() []string {
+	names := []string{"/bootstrap", "/goal", "/help", "/memory", "/models", "/new", "/status"}
+	sort.Strings(names)
+	return names
+}
+
+const channelCommandHelp = `Available commands:
+/bootstrap — Start a bootstrap session
+/goal [condition|clear] — Set, show, or clear an active goal
+/new — Start a new conversation
+/status — Show current thread info
+/models — List available models
+/memory — Show memory status
+/<skill-name> <task> — Activate an enabled skill for one turn
+/help — Show this help`
 
 func channelAssistantID(message channel.Message, fallback string) string {
 	configured := strings.TrimSpace(message.Metadata["assistant_id"])
@@ -382,19 +606,8 @@ func (dispatcher channelDispatcher) mappedThread(ctx context.Context, request ch
 }
 
 func (dispatcher channelDispatcher) createMappedThread(ctx context.Context, request channel.Request) (domain.ThreadID, error) {
-	thread, err := domain.NewThread(time.Now())
+	thread, err := dispatcher.createChannelThread(ctx, request)
 	if err != nil {
-		return "", err
-	}
-	thread.Metadata = map[string]string{
-		store.OwnerMetadataKey: request.Identity.UserID, "source": "channel",
-		"channel_provider": request.Message.Provider, "channel_workspace_id": request.Message.WorkspaceID,
-		"channel_chat_id": request.Message.ChatID, "channel_binding_id": request.Identity.BindingID,
-	}
-	if request.Message.TopicID != "" {
-		thread.Metadata["channel_topic_id"] = request.Message.TopicID
-	}
-	if err = dispatcher.service.store.CreateThread(ctx, thread); err != nil {
 		return "", err
 	}
 	now := time.Now().UTC()
@@ -418,6 +631,50 @@ func (dispatcher channelDispatcher) createMappedThread(ctx context.Context, requ
 			return "", channel.ErrConflict
 		}
 		return actual.ThreadID, nil
+	}
+	return thread.ID, nil
+}
+
+func (dispatcher channelDispatcher) createChannelThread(ctx context.Context, request channel.Request) (domain.Thread, error) {
+	thread, err := domain.NewThread(time.Now())
+	if err != nil {
+		return domain.Thread{}, err
+	}
+	thread.Metadata = map[string]string{
+		store.OwnerMetadataKey: request.Identity.UserID, "source": "channel",
+		"channel_provider": request.Message.Provider, "channel_workspace_id": request.Message.WorkspaceID,
+		"channel_chat_id": request.Message.ChatID, "channel_binding_id": request.Identity.BindingID,
+	}
+	if request.Message.TopicID != "" {
+		thread.Metadata["channel_topic_id"] = request.Message.TopicID
+	}
+	if err = dispatcher.service.store.CreateThread(ctx, thread); err != nil {
+		return domain.Thread{}, err
+	}
+	return thread, nil
+}
+
+func (dispatcher channelDispatcher) freshThread(ctx context.Context, request channel.Request) (domain.ThreadID, error) {
+	_, found, err := dispatcher.mappedThread(ctx, request)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return dispatcher.createMappedThread(ctx, request)
+	}
+	thread, err := dispatcher.createChannelThread(ctx, request)
+	if err != nil {
+		return "", err
+	}
+	now := time.Now().UTC()
+	mapping := channel.Conversation{
+		BindingID: request.Identity.BindingID, Provider: request.Message.Provider,
+		ChatID: request.Message.ChatID, TopicID: request.Message.TopicID, ThreadID: thread.ID,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err = dispatcher.state.RemapConversation(ctx, mapping); err != nil {
+		_ = dispatcher.service.store.DeleteThread(context.WithoutCancel(ctx), thread.ID)
+		return "", err
 	}
 	return thread.ID, nil
 }
@@ -513,14 +770,182 @@ func waitChannelRun(ctx context.Context, repository store.Store, runID domain.Ru
 	}
 }
 
+func cloneAnyMap(source map[string]any) map[string]any {
+	cloned := make(map[string]any, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func channelBootstrap(ctx context.Context) bool {
+	bootstrap, _ := ctx.Value(channelBootstrapContextKey).(bool)
+	return bootstrap
+}
+
+func channelUser(ctx context.Context) string {
+	userID, _ := ctx.Value(channelUserContextKey).(string)
+	return userID
+}
+
+func channelSkill(ctx context.Context) (channelSkillActivation, bool) {
+	activation, ok := ctx.Value(channelSkillContextKey).(channelSkillActivation)
+	return activation, ok && activation.Name != "" && activation.Instructions != ""
+}
+
+func inheritChannelContext(destination, source context.Context) context.Context {
+	if channelBootstrap(source) {
+		destination = context.WithValue(destination, channelBootstrapContextKey, true)
+	}
+	if userID := channelUser(source); userID != "" {
+		destination = context.WithValue(destination, channelUserContextKey, userID)
+	}
+	if activation, ok := channelSkill(source); ok {
+		destination = context.WithValue(destination, channelSkillContextKey, activation)
+	}
+	return destination
+}
+
+func channelSkillPrompt(activation channelSkillActivation) string {
+	return fmt.Sprintf("<activated_skill name=%q>\nThe user explicitly activated this enabled skill for the current turn. Follow its instructions.\n%s\n</activated_skill>", activation.Name, activation.Instructions)
+}
+
+func channelCommandEnvironment(ctx context.Context) (map[string]string, error) {
+	userID := channelUser(ctx)
+	if userID == "" {
+		return nil, nil
+	}
+	return map[string]string{
+		"DEERFLOW_CHANNEL_USER_ID": userID,
+		"GOFER_CHANNEL_USER_ID":    userID,
+	}, nil
+}
+
 func (service *Service) channelRoutes(mux *http.ServeMux) {
 	if service.channels == nil {
 		return
 	}
 	mux.HandleFunc("GET /api/channels", service.getChannelStatus)
+	mux.HandleFunc("GET /api/channels/providers", service.getChannelProviders)
+	mux.HandleFunc("GET /api/channels/connections", service.listChannelBindings)
+	mux.HandleFunc("POST /api/channels/{provider}/connect", service.issueChannelConnectCode)
+	mux.HandleFunc("DELETE /api/channels/connections/{connection_id}", service.disconnectChannelBinding)
 	mux.HandleFunc("GET /api/channel-connections", service.listChannelBindings)
 	mux.HandleFunc("POST /api/channel-connections", service.createChannelBinding)
 	mux.HandleFunc("DELETE /api/channel-connections/{connection_id}", service.revokeChannelBinding)
+}
+
+type channelProviderResource struct {
+	Provider         string `json:"provider"`
+	DisplayName      string `json:"display_name"`
+	Enabled          bool   `json:"enabled"`
+	Configured       bool   `json:"configured"`
+	Connectable      bool   `json:"connectable"`
+	AuthMode         string `json:"auth_mode"`
+	ConnectionStatus string `json:"connection_status"`
+}
+
+func (service *Service) getChannelProviders(writer http.ResponseWriter, request *http.Request) {
+	bindings, err := service.channelState.Bindings(request.Context(), requestUser(request.Context()))
+	if err != nil {
+		writeChannelError(writer, err)
+		return
+	}
+	statuses := make(map[string]channel.BindingStatus)
+	for _, binding := range bindings {
+		if _, exists := statuses[binding.Provider]; !exists {
+			statuses[binding.Provider] = binding.Status
+		}
+	}
+	resources := make([]channelProviderResource, 0)
+	for _, provider := range service.channels.Providers() {
+		if !channel.ConnectableProvider(provider) {
+			continue
+		}
+		status := "not_connected"
+		if statuses[provider] == channel.BindingConnected {
+			status = string(channel.BindingConnected)
+		} else if statuses[provider] == channel.BindingRevoked {
+			status = string(channel.BindingRevoked)
+		}
+		resources = append(resources, channelProviderResource{
+			Provider: provider, DisplayName: channelProviderDisplayName(provider), Enabled: true,
+			Configured: true, Connectable: true, AuthMode: channelConnectionMode(provider), ConnectionStatus: status,
+		})
+	}
+	writeResourceJSON(writer, http.StatusOK, map[string]any{"enabled": true, "providers": resources})
+}
+
+func (service *Service) issueChannelConnectCode(writer http.ResponseWriter, request *http.Request) {
+	provider := strings.ToLower(strings.TrimSpace(request.PathValue("provider")))
+	if !channel.ConnectableProvider(provider) || !containsString(service.channels.Providers(), provider) {
+		writeResourceJSON(writer, http.StatusNotFound, map[string]string{"error": "Unknown channel provider"})
+		return
+	}
+	code, err := service.channelState.IssueConnectCode(
+		request.Context(), requestUser(request.Context()), provider, time.Now().UTC(),
+		channel.ConnectCodeTTL, channel.MaxPendingConnectCodes,
+	)
+	if err != nil {
+		writeChannelError(writer, err)
+		return
+	}
+	instruction := "Send /connect " + code.Code + " to the Gofer " + channelProviderDisplayName(provider) + " bot."
+	mode, connectURL := channelConnectionMode(provider), ""
+	if provider == channel.TelegramProvider {
+		instruction = "Send /start " + code.Code + " to the Gofer Telegram bot."
+		if username := strings.TrimPrefix(service.config.Channels.Telegram.BotUsername, "@"); username != "" {
+			connectURL = "https://t.me/" + username + "?start=" + code.Code
+		}
+	}
+	writeResourceJSON(writer, http.StatusOK, map[string]any{
+		"provider": provider, "mode": mode, "url": connectURL, "code": code.Code,
+		"instruction": instruction, "expires_in": int(channel.ConnectCodeTTL.Seconds()),
+	})
+}
+
+func (service *Service) disconnectChannelBinding(writer http.ResponseWriter, request *http.Request) {
+	identifier := path.Base(request.PathValue("connection_id"))
+	if err := service.channelState.Revoke(request.Context(), identifier, requestUser(request.Context()), time.Now()); err != nil {
+		writeChannelError(writer, err)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+func channelConnectionMode(provider string) string {
+	if provider == channel.TelegramProvider {
+		return "deep_link"
+	}
+	return "binding_code"
+}
+
+func channelProviderDisplayName(provider string) string {
+	switch provider {
+	case channel.TelegramProvider:
+		return "Telegram"
+	case channel.SlackProvider:
+		return "Slack"
+	case channel.DiscordProvider:
+		return "Discord"
+	case channel.FeishuProvider:
+		return "Feishu"
+	case channel.DingTalkProvider:
+		return "DingTalk"
+	case channel.WeComProvider:
+		return "WeCom"
+	case channel.WeChatProvider:
+		return "WeChat"
+	case channel.BuzzProvider:
+		return "Buzz"
+	default:
+		return provider
+	}
+}
+
+func containsString(values []string, target string) bool {
+	index := sort.SearchStrings(values, target)
+	return index < len(values) && values[index] == target
 }
 
 func (service *Service) getChannelStatus(writer http.ResponseWriter, _ *http.Request) {
@@ -579,6 +1004,8 @@ func writeChannelError(writer http.ResponseWriter, err error) {
 		status = http.StatusNotFound
 	case errors.Is(err, channel.ErrConflict):
 		status = http.StatusConflict
+	case errors.Is(err, channel.ErrBusy):
+		status = http.StatusTooManyRequests
 	}
 	writeResourceJSON(writer, status, map[string]string{"error": http.StatusText(status)})
 }

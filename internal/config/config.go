@@ -309,6 +309,7 @@ type ChannelSlackConfig struct {
 type ChannelTelegramConfig struct {
 	Enabled               bool     `yaml:"enabled" json:"enabled"`
 	BotToken              string   `yaml:"bot_token" json:"-"`
+	BotUsername           string   `yaml:"bot_username" json:"bot_username,omitempty"`
 	AllowedUsers          []string `yaml:"allowed_users" json:"allowed_users"`
 	PollTimeoutSeconds    int      `yaml:"poll_timeout_seconds" json:"poll_timeout_seconds"`
 	RequestTimeoutSeconds int      `yaml:"request_timeout_seconds" json:"request_timeout_seconds"`
@@ -814,10 +815,29 @@ func validateTelegramChannel(channelsEnabled bool, channel ChannelTelegramConfig
 	}
 	if !channelsEnabled || strings.TrimSpace(channel.BotToken) == "" || channel.PollTimeoutSeconds < 1 || channel.PollTimeoutSeconds > 50 ||
 		channel.RequestTimeoutSeconds <= channel.PollTimeoutSeconds || channel.RequestTimeoutSeconds > 120 ||
-		channel.MaxAttempts < 1 || channel.MaxAttempts > 5 || !validChannelIDs(channel.AllowedUsers) {
+		channel.MaxAttempts < 1 || channel.MaxAttempts > 5 || !validChannelIDs(channel.AllowedUsers) || !validTelegramBotUsername(channel.BotUsername) {
 		return fmt.Errorf("%w: invalid Telegram channel configuration", ErrInvalid)
 	}
 	return nil
+}
+
+func validTelegramBotUsername(value string) bool {
+	if value == "" {
+		return true
+	}
+	if strings.TrimSpace(value) != value {
+		return false
+	}
+	value = strings.TrimPrefix(value, "@")
+	if len(value) < 5 || len(value) > 64 {
+		return false
+	}
+	for _, character := range value {
+		if character != '_' && (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') && (character < '0' || character > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 func validateDiscordChannel(channelsEnabled bool, channel ChannelDiscordConfig) error {

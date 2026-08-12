@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -106,6 +107,27 @@ func TestSQLiteChannelStateOwnershipMappingAndCleanup(t *testing.T) {
 		t.Fatalf("MapConversation() = %#v, %v, %v", first, created, err)
 	}
 	assertSQLiteChannelMappingBoundaries(t, state, database, mapping, thread, now)
+	remapped, _ := domain.NewThread(now.Add(time.Second))
+	if err = database.CreateThread(ctx, remapped); err != nil {
+		t.Fatal(err)
+	}
+	mapping.ThreadID, mapping.UpdatedAt = remapped.ID, now.Add(time.Second)
+	if err = state.RemapConversation(ctx, mapping); err != nil {
+		t.Fatal(err)
+	}
+	if got, lookupErr := state.Conversation(ctx, binding.ID, "chat", ""); lookupErr != nil || got.ThreadID != remapped.ID {
+		t.Fatalf("remapped conversation = %#v, %v", got, lookupErr)
+	}
+	missingMapping := mapping
+	missingMapping.ChatID = "missing"
+	if err = state.RemapConversation(ctx, missingMapping); !errors.Is(err, channel.ErrNotFound) {
+		t.Fatalf("missing RemapConversation() = %v", err)
+	}
+	invalidMapping := mapping
+	invalidMapping.ChatID = ""
+	if err = state.RemapConversation(ctx, invalidMapping); !errors.Is(err, channel.ErrInvalid) {
+		t.Fatalf("invalid RemapConversation() = %v", err)
+	}
 	if err = state.Revoke(ctx, binding.ID, "bob", now); !errors.Is(err, channel.ErrNotFound) {
 		t.Fatalf("foreign Revoke() = %v", err)
 	}
@@ -138,10 +160,6 @@ func assertSQLiteChannelBindingBoundaries(t *testing.T, state channel.State, bin
 	if err != nil || updated.WorkspaceName != "Updated" || updated.ID != binding.ID {
 		t.Fatalf("same-owner Bind() = %#v, %v", updated, err)
 	}
-	recovered, err := state.(*channelState).bindAfterInsertConflict(ctx, binding)
-	if err != nil || recovered.ID != binding.ID {
-		t.Fatalf("bindAfterInsertConflict() = %#v, %v", recovered, err)
-	}
 	if _, err = state.Bind(ctx, channel.Binding{}); !errors.Is(err, channel.ErrInvalid) {
 		t.Fatalf("invalid Bind() = %v", err)
 	}
@@ -152,13 +170,76 @@ func assertSQLiteChannelBindingBoundaries(t *testing.T, state channel.State, bin
 	if _, err := state.Bind(ctx, other); !errors.Is(err, channel.ErrConflict) {
 		t.Fatalf("foreign Bind() = %v", err)
 	}
-	if _, err := state.(*channelState).bindAfterInsertConflict(ctx, other); !errors.Is(err, channel.ErrConflict) {
-		t.Fatalf("foreign bindAfterInsertConflict() = %v", err)
-	}
 	if value := formatChannelTime(time.Time{}); value != "" {
 		t.Fatalf("formatChannelTime(zero) = %q", value)
 	}
 	return other
+}
+
+func TestSQLiteChannelConnectCodesPersistAndConsumeAtomically(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "channel-connect.db")
+	database := openSQLite(t, path)
+	state := database.ChannelState()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if _, err := state.IssueConnectCode(ctx, "alice", "slack", now, time.Minute, 0); !errors.Is(err, channel.ErrInvalid) {
+		t.Fatalf("invalid pending cap = %v", err)
+	}
+	if _, err := state.IssueConnectCode(ctx, "", "slack", now, time.Minute, 1); !errors.Is(err, channel.ErrInvalid) {
+		t.Fatalf("invalid owner = %v", err)
+	}
+	if _, err := state.Connect(ctx, "invalid", channel.ConnectionIdentity{Provider: "slack", ExternalUserID: "U1"}, now); !errors.Is(err, channel.ErrInvalid) {
+		t.Fatalf("invalid Connect() = %v", err)
+	}
+	code, err := state.IssueConnectCode(ctx, "alice", "slack", now, channel.ConnectCodeTTL, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = state.IssueConnectCode(ctx, "alice", "slack", now, channel.ConnectCodeTTL, 1); !errors.Is(err, channel.ErrBusy) {
+		t.Fatalf("pending cap = %v", err)
+	}
+	if err = database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database = openSQLite(t, path)
+	defer func() { _ = database.Close() }()
+	state = database.ChannelState()
+	identity := channel.ConnectionIdentity{
+		Provider: "slack", WorkspaceID: "team", WorkspaceName: "Team",
+		ExternalUserID: "U1", ExternalUserName: "Alice",
+	}
+	if _, err = state.Connect(ctx, code.Code, channel.ConnectionIdentity{Provider: "discord", ExternalUserID: "U1"}, now); !errors.Is(err, channel.ErrNotFound) {
+		t.Fatalf("provider mismatch = %v", err)
+	}
+	bound, err := state.Connect(ctx, code.Code, identity, now)
+	if err != nil || bound.UserID != "alice" || bound.ExternalUserName != "Alice" {
+		t.Fatalf("Connect() = %#v, %v", bound, err)
+	}
+	if _, err = state.Connect(ctx, code.Code, identity, now); !errors.Is(err, channel.ErrNotFound) {
+		t.Fatalf("reused code = %v", err)
+	}
+	transferCode, err := state.IssueConnectCode(ctx, "bob", "slack", now, time.Minute, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = state.Connect(ctx, transferCode.Code, identity, now); !errors.Is(err, channel.ErrConflict) {
+		t.Fatalf("connected identity transfer = %v", err)
+	}
+	if err = state.Revoke(ctx, bound.ID, "alice", now); err != nil {
+		t.Fatal(err)
+	}
+	transferred, err := state.Connect(ctx, transferCode.Code, identity, now)
+	if err != nil || transferred.ID != bound.ID || transferred.UserID != "bob" {
+		t.Fatalf("revoked identity transfer = %#v, %v", transferred, err)
+	}
+	expired, err := state.IssueConnectCode(ctx, "bob", "slack", now, time.Minute, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = state.Connect(ctx, expired.Code, channel.ConnectionIdentity{Provider: "slack", ExternalUserID: "U2"}, now.Add(time.Minute)); !errors.Is(err, channel.ErrNotFound) {
+		t.Fatalf("expired code = %v", err)
+	}
 }
 
 func assertSQLiteChannelMappingBoundaries(t *testing.T, state channel.State, database *SQL, mapping channel.Conversation, thread domain.Thread, now time.Time) {
@@ -215,6 +296,15 @@ func TestSQLiteChannelStatePropagatesCancelledOperations(t *testing.T) {
 	mapping := channel.Conversation{BindingID: binding.ID, Provider: "webhook", ChatID: "chat", ThreadID: thread.ID, CreatedAt: now, UpdatedAt: now}
 	if _, _, err := state.MapConversation(ctx, mapping); err == nil {
 		t.Fatal("MapConversation(cancelled) succeeded")
+	}
+	if err := state.RemapConversation(ctx, mapping); err == nil {
+		t.Fatal("RemapConversation(cancelled) succeeded")
+	}
+	if _, err := state.IssueConnectCode(ctx, "alice", "slack", now, time.Minute, 1); err == nil {
+		t.Fatal("IssueConnectCode(cancelled) succeeded")
+	}
+	if _, err := state.Connect(ctx, "cnc_"+strings.Repeat("a", 48), channel.ConnectionIdentity{Provider: "slack", ExternalUserID: "U1"}, now); err == nil {
+		t.Fatal("Connect(cancelled) succeeded")
 	}
 	if err := state.DeleteThread(ctx, thread.ID); err == nil {
 		t.Fatal("DeleteThread(cancelled) succeeded")

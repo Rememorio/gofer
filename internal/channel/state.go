@@ -21,6 +21,13 @@ var (
 	ErrConflict = errors.New("channel state conflict")
 )
 
+const (
+	// ConnectCodeTTL is the lifetime of a browser-issued channel binding code.
+	ConnectCodeTTL = 10 * time.Minute
+	// MaxPendingConnectCodes bounds unused codes per owner and provider.
+	MaxPendingConnectCodes = 5
+)
+
 // BindingStatus is the lifecycle state of one external account binding.
 type BindingStatus string
 
@@ -51,6 +58,26 @@ type Identity struct {
 	UserID    string `json:"user_id"`
 }
 
+// ConnectCode is a short-lived, single-use authorization to bind one external
+// provider identity to an authenticated Gofer user.
+type ConnectCode struct {
+	Code      string    `json:"code"`
+	UserID    string    `json:"-"`
+	Provider  string    `json:"provider"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// ConnectionIdentity is provider-authenticated metadata supplied by an
+// inbound /connect message. Ownership always comes from the consumed code.
+type ConnectionIdentity struct {
+	Provider         string
+	WorkspaceID      string
+	WorkspaceName    string
+	ExternalUserID   string
+	ExternalUserName string
+}
+
 // Conversation maps one provider topic to its durable Gofer thread.
 type Conversation struct {
 	BindingID string          `json:"binding_id"`
@@ -71,7 +98,10 @@ type State interface {
 	Revoke(context.Context, string, string, time.Time) error
 	Conversation(context.Context, string, string, string) (Conversation, error)
 	MapConversation(context.Context, Conversation) (Conversation, bool, error)
+	RemapConversation(context.Context, Conversation) error
 	DeleteThread(context.Context, domain.ThreadID) error
+	IssueConnectCode(context.Context, string, string, time.Time, time.Duration, int) (ConnectCode, error)
+	Connect(context.Context, string, ConnectionIdentity, time.Time) (Binding, error)
 }
 
 // NewBinding constructs a normalized connected binding.
@@ -116,12 +146,25 @@ func (conversation Conversation) Validate() error {
 	return nil
 }
 
+// Validate verifies bounded provider-authenticated connection metadata.
+func (identity ConnectionIdentity) Validate() error {
+	if identity.Provider != normalizeProvider(identity.Provider) || !validProvider(identity.Provider) ||
+		strings.TrimSpace(identity.WorkspaceID) != identity.WorkspaceID || len(identity.WorkspaceID) > 256 ||
+		strings.TrimSpace(identity.ExternalUserID) != identity.ExternalUserID || identity.ExternalUserID == "" || len(identity.ExternalUserID) > 256 ||
+		strings.TrimSpace(identity.WorkspaceName) != identity.WorkspaceName || len(identity.WorkspaceName) > 512 ||
+		strings.TrimSpace(identity.ExternalUserName) != identity.ExternalUserName || len(identity.ExternalUserName) > 512 {
+		return ErrInvalid
+	}
+	return nil
+}
+
 // MemoryState is the concurrency-safe ephemeral State implementation.
 type MemoryState struct {
 	mu            sync.RWMutex
 	bindings      map[string]Binding
 	identities    map[string]string
 	conversations map[string]Conversation
+	connectCodes  map[string]ConnectCode
 	dedupe        *MemoryDedupe
 }
 
@@ -129,7 +172,7 @@ type MemoryState struct {
 func NewMemoryState() *MemoryState {
 	return &MemoryState{
 		bindings: make(map[string]Binding), identities: make(map[string]string),
-		conversations: make(map[string]Conversation), dedupe: NewMemoryDedupe(),
+		conversations: make(map[string]Conversation), connectCodes: make(map[string]ConnectCode), dedupe: NewMemoryDedupe(),
 	}
 }
 
@@ -143,6 +186,10 @@ func (state *MemoryState) Bind(ctx context.Context, binding Binding) (Binding, e
 	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	return state.bindLocked(binding)
+}
+
+func (state *MemoryState) bindLocked(binding Binding) (Binding, error) {
 	key := identityKey(binding.Provider, binding.WorkspaceID, binding.ExternalUserID)
 	if identifier := state.identities[key]; identifier != "" {
 		existing := state.bindings[identifier]
@@ -160,6 +207,75 @@ func (state *MemoryState) Bind(ctx context.Context, binding Binding) (Binding, e
 	state.bindings[binding.ID] = binding
 	state.identities[key] = binding.ID
 	return binding, nil
+}
+
+// IssueConnectCode atomically creates one bounded, expiring binding code.
+func (state *MemoryState) IssueConnectCode(
+	ctx context.Context,
+	userID, provider string,
+	now time.Time,
+	ttl time.Duration,
+	maxPending int,
+) (ConnectCode, error) {
+	if err := contextError(ctx); err != nil {
+		return ConnectCode{}, err
+	}
+	if maxPending < 1 || maxPending > 20 {
+		return ConnectCode{}, ErrInvalid
+	}
+	code, err := NewConnectCode(userID, provider, now, ttl)
+	if err != nil {
+		return ConnectCode{}, err
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	pending := 0
+	for key, existing := range state.connectCodes {
+		if !existing.ExpiresAt.After(now) {
+			delete(state.connectCodes, key)
+			continue
+		}
+		if existing.UserID == code.UserID && existing.Provider == code.Provider {
+			pending++
+		}
+	}
+	if pending >= maxPending {
+		return ConnectCode{}, ErrBusy
+	}
+	state.connectCodes[code.Code] = code
+	return code, nil
+}
+
+// Connect consumes a matching code and atomically creates or reactivates its
+// owner binding.
+func (state *MemoryState) Connect(ctx context.Context, code string, identity ConnectionIdentity, at time.Time) (Binding, error) {
+	if err := contextError(ctx); err != nil {
+		return Binding{}, err
+	}
+	if err := identity.Validate(); err != nil || ValidateConnectCode(code) != nil || at.IsZero() {
+		return Binding{}, ErrInvalid
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	pending, exists := state.connectCodes[code]
+	if !exists || pending.Provider != identity.Provider {
+		return Binding{}, ErrNotFound
+	}
+	if !pending.ExpiresAt.After(at) {
+		delete(state.connectCodes, code)
+		return Binding{}, ErrNotFound
+	}
+	binding, err := NewBinding(pending.UserID, identity.Provider, identity.WorkspaceID, identity.ExternalUserID, at)
+	if err != nil {
+		return Binding{}, err
+	}
+	binding.WorkspaceName, binding.ExternalUserName = identity.WorkspaceName, identity.ExternalUserName
+	bound, err := state.bindLocked(binding)
+	if err != nil {
+		return Binding{}, err
+	}
+	delete(state.connectCodes, code)
+	return bound, nil
 }
 
 // Bindings lists isolated owner bindings in stable newest-first order.
@@ -259,6 +375,28 @@ func (state *MemoryState) MapConversation(ctx context.Context, conversation Conv
 	return conversation, true, nil
 }
 
+// RemapConversation replaces one active binding's topic mapping.
+func (state *MemoryState) RemapConversation(ctx context.Context, conversation Conversation) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if err := conversation.Validate(); err != nil {
+		return err
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	binding, exists := state.bindings[conversation.BindingID]
+	if !exists || binding.Status != BindingConnected || binding.Provider != conversation.Provider {
+		return ErrNotFound
+	}
+	key := conversationKey(conversation.BindingID, conversation.ChatID, conversation.TopicID)
+	if _, exists = state.conversations[key]; !exists {
+		return ErrNotFound
+	}
+	state.conversations[key] = conversation
+	return nil
+}
+
 // DeleteThread removes every mapping to a deleted durable thread.
 func (state *MemoryState) DeleteThread(ctx context.Context, threadID domain.ThreadID) error {
 	if err := contextError(ctx); err != nil {
@@ -298,6 +436,34 @@ func newBindingID() (string, error) {
 		return "", fmt.Errorf("generate channel binding identifier: %w", err)
 	}
 	return "chn_" + hex.EncodeToString(random[:]), nil
+}
+
+// NewConnectCode generates one cryptographically random bounded binding code.
+func NewConnectCode(userID, provider string, now time.Time, ttl time.Duration) (ConnectCode, error) {
+	userID, provider = strings.TrimSpace(userID), normalizeProvider(provider)
+	if userID == "" || len(userID) > 128 || !validProvider(provider) || now.IsZero() || ttl < time.Minute || ttl > time.Hour {
+		return ConnectCode{}, ErrInvalid
+	}
+	var random [24]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return ConnectCode{}, fmt.Errorf("generate channel connect code: %w", err)
+	}
+	return ConnectCode{
+		Code: "cnc_" + hex.EncodeToString(random[:]), UserID: userID, Provider: provider,
+		CreatedAt: now.UTC(), ExpiresAt: now.Add(ttl).UTC(),
+	}, nil
+}
+
+// ValidateConnectCode verifies the non-secret shape of a binding code.
+func ValidateConnectCode(value string) error {
+	if len(value) != 52 || !strings.HasPrefix(value, "cnc_") {
+		return ErrInvalid
+	}
+	_, err := hex.DecodeString(strings.TrimPrefix(value, "cnc_"))
+	if err != nil {
+		return ErrInvalid
+	}
+	return nil
 }
 
 func validBindingID(value string) bool {

@@ -646,6 +646,27 @@ func TestLoadFile(t *testing.T) {
 	}
 }
 
+func TestDeploymentExampleConfiguration(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "deploy", "config.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	configured, err := Load(strings.NewReader(string(raw)), WithEnvLookup(func(name string) (string, bool) {
+		if name == "OPENAI_API_KEY" {
+			return "test-key", true
+		}
+		return "", false
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configured.Server.Address != "0.0.0.0:8001" || configured.Storage.DSN != "/var/lib/gofer/gofer.db" ||
+		configured.Workspace.Root != "/var/lib/gofer/workspaces" || configured.Sandbox.AllowHostExecution {
+		t.Fatalf("deployment configuration = %#v", configured)
+	}
+}
+
 func TestLoadReportsReadAndLookupErrors(t *testing.T) {
 	t.Parallel()
 

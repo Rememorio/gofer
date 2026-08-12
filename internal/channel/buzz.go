@@ -478,10 +478,15 @@ func (provider *Buzz) handleEvent(ctx context.Context, submit SubmitFunc, frame 
 
 func (provider *Buzz) handleChatEvent(ctx context.Context, submit SubmitFunc, event buzzEvent) error {
 	channels := buzzTagValues(event, "h")
-	if len(channels) == 0 || event.PubKey == provider.keys.Public || !listed(provider.allowedUsers, event.PubKey) {
+	if len(channels) == 0 || event.PubKey == provider.keys.Public {
 		return nil
 	}
 	channelID := channels[0]
+	text := strings.TrimSpace(event.Content)
+	_, connecting := ParseConnectCommand(text, BuzzProvider)
+	if !connecting && !listed(provider.allowedUsers, event.PubKey) {
+		return nil
+	}
 	threadRoot := firstBuzzTag(event, "e")
 	if len(channelID) > 256 || len(threadRoot) > 256 {
 		return nil
@@ -492,10 +497,9 @@ func (provider *Buzz) handleChatEvent(ctx context.Context, submit SubmitFunc, ev
 	provider.mu.Lock()
 	metadata := provider.metadata[channelID]
 	provider.mu.Unlock()
-	if provider.requireMention && !mentioned && !listed(provider.mentionFree, channelID) && metadata.Type != "dm" && !engaged {
+	if !connecting && provider.requireMention && !mentioned && !listed(provider.mentionFree, channelID) && metadata.Type != "dm" && !engaged {
 		return nil
 	}
-	text := strings.TrimSpace(event.Content)
 	if mentioned {
 		text = stripBuzzMention(text)
 	}

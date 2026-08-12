@@ -445,11 +445,12 @@ func (provider *Discord) normalize(ctx context.Context, inbound discordMessage) 
 		return Message{}, false
 	}
 	text, hasMention := discordMessageText(inbound.Content, botUserID)
+	_, connecting := ParseConnectCommand(text, DiscordProvider)
 	attachments := discordAttachments(inbound.Attachments)
 	if text == "" && len(attachments) == 0 {
 		return Message{}, false
 	}
-	chatID, topicID, accepted := provider.discordRoute(ctx, inbound, hasMention)
+	chatID, topicID, accepted := provider.discordRoute(ctx, inbound, hasMention || connecting)
 	if !accepted {
 		return Message{}, false
 	}

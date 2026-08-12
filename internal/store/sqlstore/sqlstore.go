@@ -121,6 +121,8 @@ var schema = []string{
 	`CREATE INDEX IF NOT EXISTS gofer_feedback_run_idx ON gofer_feedback(thread_id,run_id,created_at)`,
 	`CREATE TABLE IF NOT EXISTS gofer_channel_bindings (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,provider TEXT NOT NULL,workspace_id TEXT NOT NULL,workspace_name TEXT NOT NULL,external_user_id TEXT NOT NULL,external_user_name TEXT NOT NULL,status TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(provider,workspace_id,external_user_id))`,
 	`CREATE INDEX IF NOT EXISTS gofer_channel_bindings_user_idx ON gofer_channel_bindings(user_id,updated_at)`,
+	`CREATE TABLE IF NOT EXISTS gofer_channel_connect_codes (code TEXT PRIMARY KEY,user_id TEXT NOT NULL,provider TEXT NOT NULL,slot BIGINT NOT NULL,created_at TEXT NOT NULL,expires_at BIGINT NOT NULL,UNIQUE(user_id,provider,slot))`,
+	`CREATE INDEX IF NOT EXISTS gofer_channel_connect_codes_owner_idx ON gofer_channel_connect_codes(user_id,provider,expires_at)`,
 	`CREATE TABLE IF NOT EXISTS gofer_channel_conversations (binding_id TEXT NOT NULL REFERENCES gofer_channel_bindings(id) ON DELETE CASCADE,provider TEXT NOT NULL,chat_id TEXT NOT NULL,topic_id TEXT NOT NULL,thread_id TEXT NOT NULL REFERENCES gofer_threads(id) ON DELETE CASCADE,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(binding_id,chat_id,topic_id))`,
 	`CREATE INDEX IF NOT EXISTS gofer_channel_conversations_thread_idx ON gofer_channel_conversations(thread_id)`,
 	`CREATE TABLE IF NOT EXISTS gofer_channel_deliveries (delivery_key TEXT PRIMARY KEY,expires_at BIGINT NOT NULL,complete BOOLEAN NOT NULL)`,

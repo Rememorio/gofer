@@ -1,7 +1,7 @@
 # Gofer
 
 Gofer is a Go-native super-agent harness for long-running tasks, inspired by
-[DeerFlow](https://github.com/bytedance/deer-flow). It is being built as a
+[DeerFlow](https://github.com/bytedance/deer-flow). It is built as a
 single, inspectable binary with durable runs, tools, skills, sandboxed
 execution, memory, and parallel sub-agents.
 
@@ -10,15 +10,17 @@ one is written in Go.
 
 ## Status
 
-Gofer is under active development. The engineering foundation, durable core,
+Gofer implements the planned Go-native DeerFlow core and platform surface. The
+engineering foundation, durable core,
 normalized streaming model API, OpenAI-compatible Chat Completions and native
 Anthropic Messages adapters, validated tool registry, event-journaled agent
 loop, traversal-resistant thread workspaces,
 artifact catalog, built-in file tools, and fail-closed policy middleware are in
 place. MCP servers can contribute validated tools over stdio or Streamable
 HTTP, and Skills packages support strict metadata, persistent enablement,
-progressive discovery, and atomic read-only projection. It is not yet a
-drop-in DeerFlow replacement. Bounded shell execution is available through a
+progressive discovery, and atomic read-only projection. It is an independently
+designed service rather than a byte-for-byte replacement for DeerFlow's Python
+backend or web UI. Bounded shell execution is available through a
 fail-closed local driver or hardened ephemeral Docker containers. Stateful,
 thread-scoped browser automation is available through Chrome DevTools Protocol
 with bounded sessions, stable snapshot references, screenshot artifacts, and
@@ -135,7 +137,7 @@ extensions, and bounded-cardinality Prometheus metrics.
 - **Single binary:** the gateway, agent runtime, local persistence, CLI, and
   extension surfaces ship together by default.
 
-See [Architecture](docs/architecture.md) for the planned component boundaries
+See [Architecture](docs/architecture.md) for the component boundaries
 and [Roadmap](docs/roadmap.md) for the implementation sequence. Command
 isolation and its trust boundaries are documented in
 [Sandbox](docs/sandbox.md). Browser lifecycle and network boundaries are
@@ -144,11 +146,15 @@ The long-running task primitives are documented in
 [Task control](docs/task-control.md).
 HTTP contracts and persistence behavior are documented in
 [Gateway and persistence](docs/gateway.md).
+The implemented backend surface and explicit source-level non-goals are listed
+in [DeerFlow compatibility](docs/compatibility.md).
 Messaging identity, webhook, and callback contracts are documented in
 [Channels](docs/channels.md), including signed webhooks, GitHub repository
 automation, and native Slack, Telegram, Discord, Feishu/Lark, DingTalk, WeCom,
 WeChat, and Buzz/Nostr connections.
 Operational boundaries are documented in [Service control plane](docs/control-plane.md).
+Container deployment, release archives, and schema upgrade behavior are
+documented in [Deployment and releases](docs/deployment.md).
 Tool result externalization and fallback behavior are documented in
 [Tool output budgets](docs/tool-output.md).
 Model-input trust boundaries are documented in

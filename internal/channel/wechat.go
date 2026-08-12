@@ -313,10 +313,14 @@ func (provider *WeChat) normalize(incoming weChatMessage) (Message, string, bool
 	}
 	messageID := firstString(incoming.MessageID, incoming.MsgID, incoming.ClientID, incoming.Context)
 	contextToken := strings.TrimSpace(incoming.Context)
-	if userID == "" || messageID == "" || contextToken == "" || !allowed(provider.allowedUsers, userID) {
+	if userID == "" || messageID == "" || contextToken == "" {
 		return Message{}, "", false
 	}
 	text, attachments := parseWeChatItems(messageID, incoming.Items)
+	_, connecting := ParseConnectCommand(text, WeChatProvider)
+	if !connecting && !allowed(provider.allowedUsers, userID) {
+		return Message{}, "", false
+	}
 	if text == "" && len(attachments) == 0 {
 		return Message{}, "", false
 	}

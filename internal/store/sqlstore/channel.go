@@ -22,6 +22,14 @@ func (state *channelState) Bind(ctx context.Context, binding channel.Binding) (c
 		return channel.Binding{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	bound, err := state.bindChannelTx(ctx, tx, binding)
+	if err != nil {
+		return channel.Binding{}, err
+	}
+	return bound, tx.Commit()
+}
+
+func (state *channelState) bindChannelTx(ctx context.Context, tx *sql.Tx, binding channel.Binding) (channel.Binding, error) {
 	existing, err := state.scanBinding(tx.QueryRowContext(ctx, state.database.bind(channelBindingByIdentity), binding.Provider, binding.WorkspaceID, binding.ExternalUserID))
 	if err != nil && !errors.Is(err, channel.ErrNotFound) {
 		return channel.Binding{}, err
@@ -56,7 +64,7 @@ func (state *channelState) updateChannelBinding(ctx context.Context, tx *sql.Tx,
 	if affected != 1 {
 		return existing, channel.ErrConflict
 	}
-	return existing, tx.Commit()
+	return existing, nil
 }
 
 func (state *channelState) insertChannelBinding(ctx context.Context, tx *sql.Tx, binding channel.Binding) (channel.Binding, error) {
@@ -70,10 +78,13 @@ func (state *channelState) insertChannelBinding(ctx context.Context, tx *sql.Tx,
 		return channel.Binding{}, err
 	}
 	if affected != 1 {
-		_ = tx.Rollback()
-		return state.bindAfterInsertConflict(ctx, binding)
+		existing, lookupErr := state.scanBinding(tx.QueryRowContext(ctx, state.database.bind(channelBindingByIdentity), binding.Provider, binding.WorkspaceID, binding.ExternalUserID))
+		if lookupErr != nil {
+			return channel.Binding{}, lookupErr
+		}
+		return state.updateChannelBinding(ctx, tx, existing, binding)
 	}
-	return binding, tx.Commit()
+	return binding, nil
 }
 
 func (state *channelState) Bindings(ctx context.Context, userID string) ([]channel.Binding, error) {
@@ -106,6 +117,88 @@ func (state *channelState) Revoke(ctx context.Context, identifier, userID string
 		return channel.ErrNotFound
 	}
 	return nil
+}
+
+func (state *channelState) IssueConnectCode(
+	ctx context.Context,
+	userID, provider string,
+	now time.Time,
+	ttl time.Duration,
+	maxPending int,
+) (channel.ConnectCode, error) {
+	if maxPending < 1 || maxPending > 20 {
+		return channel.ConnectCode{}, channel.ErrInvalid
+	}
+	code, err := channel.NewConnectCode(userID, provider, now, ttl)
+	if err != nil {
+		return channel.ConnectCode{}, err
+	}
+	tx, err := state.database.db.BeginTx(ctx, nil)
+	if err != nil {
+		return channel.ConnectCode{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.ExecContext(ctx, state.database.bind(`DELETE FROM gofer_channel_connect_codes WHERE expires_at<=?`), now.UTC().UnixNano()); err != nil {
+		return channel.ConnectCode{}, err
+	}
+	for slot := 0; slot < maxPending; slot++ {
+		result, insertErr := tx.ExecContext(ctx, state.database.bind(`INSERT INTO gofer_channel_connect_codes(code,user_id,provider,slot,created_at,expires_at) VALUES(?,?,?,?,?,?) ON CONFLICT(user_id,provider,slot) DO NOTHING`),
+			code.Code, code.UserID, code.Provider, slot, formatChannelTime(code.CreatedAt), code.ExpiresAt.UnixNano())
+		if insertErr != nil {
+			return channel.ConnectCode{}, insertErr
+		}
+		inserted, rowsErr := result.RowsAffected()
+		if rowsErr != nil {
+			return channel.ConnectCode{}, rowsErr
+		}
+		if inserted == 1 {
+			return code, tx.Commit()
+		}
+	}
+	return channel.ConnectCode{}, channel.ErrBusy
+}
+
+func (state *channelState) Connect(ctx context.Context, code string, identity channel.ConnectionIdentity, at time.Time) (channel.Binding, error) {
+	if err := channel.ValidateConnectCode(code); err != nil || identity.Validate() != nil || at.IsZero() {
+		return channel.Binding{}, channel.ErrInvalid
+	}
+	tx, err := state.database.db.BeginTx(ctx, nil)
+	if err != nil {
+		return channel.Binding{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.ExecContext(ctx, state.database.bind(`DELETE FROM gofer_channel_connect_codes WHERE expires_at<=?`), at.UTC().UnixNano()); err != nil {
+		return channel.Binding{}, err
+	}
+	var userID, provider string
+	err = tx.QueryRowContext(ctx, state.database.bind(`SELECT user_id,provider FROM gofer_channel_connect_codes WHERE code=?`), code).Scan(&userID, &provider)
+	if errors.Is(err, sql.ErrNoRows) || err == nil && provider != identity.Provider {
+		return channel.Binding{}, channel.ErrNotFound
+	}
+	if err != nil {
+		return channel.Binding{}, err
+	}
+	binding, err := channel.NewBinding(userID, identity.Provider, identity.WorkspaceID, identity.ExternalUserID, at)
+	if err != nil {
+		return channel.Binding{}, err
+	}
+	binding.WorkspaceName, binding.ExternalUserName = identity.WorkspaceName, identity.ExternalUserName
+	bound, err := state.bindChannelTx(ctx, tx, binding)
+	if err != nil {
+		return channel.Binding{}, err
+	}
+	result, err := tx.ExecContext(ctx, state.database.bind(`DELETE FROM gofer_channel_connect_codes WHERE code=? AND provider=?`), code, identity.Provider)
+	if err != nil {
+		return channel.Binding{}, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return channel.Binding{}, err
+	}
+	if affected != 1 {
+		return channel.Binding{}, channel.ErrNotFound
+	}
+	return bound, tx.Commit()
 }
 
 func (state *channelState) Resolve(ctx context.Context, provider, workspaceID, externalUserID string) (channel.Identity, error) {
@@ -159,6 +252,26 @@ func (state *channelState) MapConversation(ctx context.Context, conversation cha
 	return existing, false, tx.Commit()
 }
 
+func (state *channelState) RemapConversation(ctx context.Context, conversation channel.Conversation) error {
+	if err := conversation.Validate(); err != nil {
+		return err
+	}
+	result, err := state.database.db.ExecContext(ctx, state.database.bind(`UPDATE gofer_channel_conversations SET provider=?,thread_id=?,updated_at=? WHERE binding_id=? AND chat_id=? AND topic_id=? AND EXISTS (SELECT 1 FROM gofer_channel_bindings WHERE id=? AND provider=? AND status=?)`),
+		conversation.Provider, conversation.ThreadID, formatChannelTime(conversation.UpdatedAt), conversation.BindingID, conversation.ChatID, conversation.TopicID,
+		conversation.BindingID, conversation.Provider, channel.BindingConnected)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return channel.ErrNotFound
+	}
+	return nil
+}
+
 func (state *channelState) DeleteThread(ctx context.Context, threadID domain.ThreadID) error {
 	_, err := state.database.db.ExecContext(ctx, state.database.bind(`DELETE FROM gofer_channel_conversations WHERE thread_id=?`), threadID)
 	return err
@@ -209,17 +322,6 @@ func (state *channelState) Complete(ctx context.Context, key string, success boo
 }
 
 const channelBindingByIdentity = `SELECT id,user_id,provider,workspace_id,workspace_name,external_user_id,external_user_name,status,created_at,updated_at FROM gofer_channel_bindings WHERE provider=? AND workspace_id=? AND external_user_id=?`
-
-func (state *channelState) bindAfterInsertConflict(ctx context.Context, binding channel.Binding) (channel.Binding, error) {
-	existing, err := state.scanBinding(state.database.db.QueryRowContext(ctx, state.database.bind(channelBindingByIdentity), binding.Provider, binding.WorkspaceID, binding.ExternalUserID))
-	if err != nil {
-		return channel.Binding{}, err
-	}
-	if existing.Status == channel.BindingConnected && existing.UserID != binding.UserID {
-		return channel.Binding{}, channel.ErrConflict
-	}
-	return state.Bind(ctx, binding)
-}
 
 func formatChannelTime(value time.Time) string {
 	if value.IsZero() {

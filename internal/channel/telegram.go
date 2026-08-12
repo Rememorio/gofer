@@ -303,7 +303,13 @@ func (provider *Telegram) normalize(update telegramUpdate) (Message, bool) {
 	}
 	userID := strconv.FormatInt(inbound.From.ID, 10)
 	if !allowed(provider.allowedUsers, userID) {
-		return Message{}, false
+		candidate := strings.TrimSpace(inbound.Text)
+		if candidate == "" {
+			candidate = strings.TrimSpace(inbound.Caption)
+		}
+		if _, connecting := ParseConnectCommand(candidate, TelegramProvider); !connecting {
+			return Message{}, false
+		}
 	}
 	text := strings.TrimSpace(inbound.Text)
 	if text == "" {

@@ -227,7 +227,7 @@ func feedbackPermission(request *http.Request) (Permission, bool) {
 
 func resourcePermission(request *http.Request) (Permission, bool) {
 	path := request.URL.Path
-	if path == "/api/channels" || path == "/api/channel-connections" || strings.HasPrefix(path, "/api/channel-connections/") {
+	if path == "/api/channels" || strings.HasPrefix(path, "/api/channels/") || path == "/api/channel-connections" || strings.HasPrefix(path, "/api/channel-connections/") {
 		if request.Method == http.MethodGet {
 			return ChannelsRead, true
 		}

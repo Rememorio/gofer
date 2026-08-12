@@ -23,12 +23,18 @@ func (function dispatcherFunc) Dispatch(ctx context.Context, request Request) (R
 
 type fakeSender struct {
 	mu      sync.Mutex
+	name    string
 	replies []Reply
 	closed  int
 	err     error
 }
 
-func (*fakeSender) Name() string { return "test" }
+func (sender *fakeSender) Name() string {
+	if sender.name != "" {
+		return sender.name
+	}
+	return "test"
+}
 func (sender *fakeSender) Send(_ context.Context, reply Reply) error {
 	sender.mu.Lock()
 	defer sender.mu.Unlock()
@@ -314,6 +320,54 @@ func TestManagerSendsUnauthorizedConnectionHint(t *testing.T) {
 	defer sender.mu.Unlock()
 	if len(sender.replies) != 1 || sender.replies[0].Text != "connect first" || sender.replies[0].InReplyTo != "1" {
 		t.Fatalf("replies = %#v", sender.replies)
+	}
+}
+
+func TestManagerConsumesConnectionCommandsBeforeAuthorization(t *testing.T) {
+	t.Parallel()
+	state := NewMemoryState()
+	now := time.Now().UTC()
+	code, err := state.IssueConnectCode(context.Background(), "alice", TelegramProvider, now, ConnectCodeTTL, MaxPendingConnectCodes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender := &fakeSender{name: TelegramProvider}
+	manager, err := NewManager(Config{
+		Resolver: resolverFunc(func(context.Context, string, string, string) (Identity, error) {
+			t.Fatal("connect attempted identity resolution")
+			return Identity{}, ErrNotFound
+		}),
+		Dispatcher: dispatcherFunc(func(context.Context, Request) (Reply, error) {
+			t.Fatal("connect reached dispatcher")
+			return Reply{}, nil
+		}),
+		Dedupe: state, Connector: state, MaxInflight: 1, DedupeTTL: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = manager.Register(sender); err != nil {
+		t.Fatal(err)
+	}
+	message := validMessage()
+	message.Provider, message.Text = TelegramProvider, "/connect "+code.Code
+	message.Metadata = map[string]string{"username": "Alice", "workspace_name": "Test"}
+	if err = manager.Handle(context.Background(), message); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := state.Resolve(context.Background(), TelegramProvider, "workspace", "external")
+	if err != nil || resolved.UserID != "alice" {
+		t.Fatalf("Resolve() = %#v, %v", resolved, err)
+	}
+	message.ID, message.Text = "2", "/connect invalid"
+	if err = manager.Handle(context.Background(), message); err != nil {
+		t.Fatal(err)
+	}
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.replies) != 2 || sender.replies[0].Text != "Telegram connected to Gofer." ||
+		sender.replies[1].Text != "Telegram connection code is invalid or expired." {
+		t.Fatalf("connect replies = %#v", sender.replies)
 	}
 }
 

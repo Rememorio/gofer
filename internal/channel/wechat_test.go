@@ -178,6 +178,10 @@ func TestWeChatNormalizationAndCursorSafety(t *testing.T) {
 			t.Fatalf("unexpected accepted message %#v", incoming)
 		}
 	}
+	blocked.Items[0].TextItem.Text = "/connect code"
+	if message, _, accepted := provider.normalize(blocked); !accepted || message.Text != "/connect code" {
+		t.Fatalf("disallowed connect = %#v, %v", message, accepted)
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(writer).Encode(map[string]any{
 			"ret": 0, "get_updates_buf": "next", "msgs": []any{map[string]any{

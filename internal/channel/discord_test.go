@@ -108,6 +108,12 @@ func TestDiscordThreadRoutingAndAttachments(t *testing.T) {
 	if _, keep = provider.normalize(context.Background(), discordMessage{ID: "X", ChannelID: "C", GuildID: "G", Content: "no mention", Author: discordAuthor{ID: "U"}}); keep {
 		t.Fatal("mention-free channel message accepted")
 	}
+	connect, keep := provider.normalize(context.Background(), discordMessage{
+		ID: "CONNECT", ChannelID: "C", GuildID: "G", Content: "/connect code", Author: discordAuthor{ID: "U"},
+	})
+	if !keep || connect.Text != "/connect code" {
+		t.Fatalf("connect without mention = %#v, %v", connect, keep)
+	}
 }
 
 func TestDiscordSendSplitsAndRetries(t *testing.T) {

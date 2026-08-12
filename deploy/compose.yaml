@@ -1,0 +1,25 @@
+services:
+  gofer:
+    image: ${GOFER_IMAGE:-ghcr.io/rememorio/gofer:latest}
+    build:
+      context: ..
+    restart: unless-stopped
+    init: true
+    read_only: true
+    ports:
+      - "8001:8001"
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
+    volumes:
+      - ./config.yaml:/etc/gofer/config.yaml:ro
+      - gofer-data:/var/lib/gofer
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+
+volumes:
+  gofer-data:

@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -23,8 +24,10 @@ import (
 	"github.com/Rememorio/gofer/internal/auth"
 	"github.com/Rememorio/gofer/internal/channel"
 	"github.com/Rememorio/gofer/internal/config"
+	"github.com/Rememorio/gofer/internal/control"
 	"github.com/Rememorio/gofer/internal/domain"
 	"github.com/Rememorio/gofer/internal/humaninput"
+	"github.com/Rememorio/gofer/internal/memory"
 	"github.com/Rememorio/gofer/internal/store"
 )
 
@@ -38,6 +41,12 @@ type appChannelDispatcherFunc func(context.Context, channel.Request) (channel.Re
 func (function appChannelDispatcherFunc) Dispatch(ctx context.Context, request channel.Request) (channel.Reply, error) {
 	return function(ctx, request)
 }
+
+type appChannelSender struct{ name string }
+
+func (sender appChannelSender) Name() string                       { return sender.name }
+func (appChannelSender) Send(context.Context, channel.Reply) error { return nil }
+func (appChannelSender) Close() error                              { return nil }
 
 func TestOpenNativeChannelsRegistersConfiguredProviders(t *testing.T) {
 	t.Parallel()
@@ -184,6 +193,115 @@ func TestChannelWebhookPersistsConversationAcrossServiceRestart(t *testing.T) {
 	assertChannelResources(t, server.URL)
 }
 
+func TestChannelWebhookCommandsAndAgentRouting(t *testing.T) {
+	t.Parallel()
+	var modelCalls atomic.Int32
+	modelBodies := make(chan []byte, 3)
+	modelServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		modelBodies <- body
+		modelCalls.Add(1)
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(writer, textChunk("agent reply"), doneChunk("stop"))
+	}))
+	defer modelServer.Close()
+	replies := make(chan channel.Reply, 12)
+	callback := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var reply channel.Reply
+		_ = json.NewDecoder(request.Body).Decode(&reply)
+		replies <- reply
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer callback.Close()
+	cfg := channelTestConfig(t, modelServer.URL+"/v1", callback.URL)
+	installChannelTestSkill(t, &cfg)
+	service, err := New(context.Background(), cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = service.Close() }()
+	server := httptest.NewServer(service.Handler())
+	defer server.Close()
+
+	assertCommand := func(identifier, text, want string) {
+		t.Helper()
+		postChannelEvent(t, server.URL, identifier, text)
+		reply := waitChannelReply(t, replies)
+		if !strings.Contains(reply.Text, want) {
+			t.Fatalf("command %q reply = %q, want %q", text, reply.Text, want)
+		}
+	}
+	assertCommand("command-1", "/status", "No active conversation.")
+	assertCommand("command-2", "/new", "New conversation started.")
+	assertCommand("command-3", "/models", "primary")
+	assertCommand("command-4", "/memory", "0 fact(s)")
+	assertCommand("command-5", "/goal Ship the release", "agent reply")
+	if body := <-modelBodies; !bytes.Contains(body, []byte("Ship the release")) {
+		t.Fatalf("goal model request = %s", body)
+	}
+	assertCommand("command-6", "/goal", "Goal: Ship the release")
+	assertCommand("command-7", "/goal off", "Goal cleared.")
+	assertCommand("command-8", "/bootstrap Configure profile", "agent reply")
+	if body := <-modelBodies; !bytes.Contains(body, []byte("Configure profile")) ||
+		!bytes.Contains(body, []byte(channelBootstrapPrompt)) {
+		t.Fatalf("bootstrap model request = %s", body)
+	}
+	assertCommand("command-9", "/help", "/<skill-name>")
+	assertCommand("command-10", "/does-not-exist", "Unknown command")
+	assertCommand("command-11", "/new", "New conversation started.")
+	assertCommand("command-12", "/release-notes Summarize changes", "agent reply")
+	if body := <-modelBodies; !bytes.Contains(body, []byte("CHANNEL_SKILL_MARKER")) ||
+		!bytes.Contains(body, []byte("Summarize changes")) {
+		t.Fatalf("slash skill model request = %s", body)
+	}
+	if modelCalls.Load() != 3 {
+		t.Fatalf("model calls = %d", modelCalls.Load())
+	}
+}
+
+func TestChannelRunContext(t *testing.T) {
+	t.Parallel()
+	plain := context.Background()
+	if channelBootstrap(plain) || channelUser(plain) != "" {
+		t.Fatal("plain context contains channel state")
+	}
+	if environment, err := channelCommandEnvironment(plain); err != nil || environment != nil {
+		t.Fatalf("plain environment = %#v, %v", environment, err)
+	}
+
+	source := context.WithValue(plain, channelBootstrapContextKey, true)
+	source = context.WithValue(source, channelUserContextKey, "platform-user")
+	source = context.WithValue(source, channelSkillContextKey, channelSkillActivation{Name: "report", Instructions: "Write clearly."})
+	inherited := inheritChannelContext(context.Background(), source)
+	activation, activated := channelSkill(inherited)
+	if !channelBootstrap(inherited) || channelUser(inherited) != "platform-user" || !activated || activation.Name != "report" {
+		t.Fatal("channel context was not inherited")
+	}
+	environment, err := channelCommandEnvironment(inherited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if environment["DEERFLOW_CHANNEL_USER_ID"] != "platform-user" || environment["GOFER_CHANNEL_USER_ID"] != "platform-user" {
+		t.Fatalf("channel environment = %#v", environment)
+	}
+}
+
+func installChannelTestSkill(t *testing.T, cfg *config.Config) {
+	t.Helper()
+	root := t.TempDir()
+	directory := filepath.Join(root, "public", "release-notes")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	document := "---\nname: release-notes\ndescription: Summarize a release\n---\n# Instructions\n\nCHANNEL_SKILL_MARKER\n"
+	if err := os.WriteFile(filepath.Join(directory, "SKILL.md"), []byte(document), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Skills.Enabled = true
+	cfg.Skills.Root = root
+	cfg.Skills.ProjectionRoot = filepath.Join(t.TempDir(), "projection")
+}
+
 func assertChannelReply(t *testing.T, reply channel.Reply, inReplyTo, text string) {
 	t.Helper()
 	if reply.Text != text || reply.InReplyTo != inReplyTo {
@@ -308,6 +426,67 @@ func TestChannelConnectionAPIIsOwnerScopedAndPermissioned(t *testing.T) {
 	channelAPIRequest(t, server.URL, http.MethodGet, "/api/channels", nil, "", http.StatusUnauthorized, nil)
 }
 
+func TestChannelConnectionCodeAPIAndProviderStatus(t *testing.T) {
+	t.Parallel()
+	state := channel.NewMemoryState()
+	manager, err := channel.NewManager(channel.Config{
+		Resolver: state, Connector: state, Dedupe: state,
+		Dispatcher: appChannelDispatcherFunc(func(context.Context, channel.Request) (channel.Reply, error) {
+			return channel.Reply{}, nil
+		}),
+		MaxInflight: 1, DedupeTTL: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = manager.Register(appChannelSender{name: channel.TelegramProvider}); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{
+		channels: manager, channelState: state,
+		config: config.Config{Channels: config.ChannelsConfig{Telegram: config.ChannelTelegramConfig{BotUsername: "GoferBot"}}},
+	}
+	mux := http.NewServeMux()
+	service.channelRoutes(mux)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	var issued struct {
+		Provider    string `json:"provider"`
+		Mode        string `json:"mode"`
+		URL         string `json:"url"`
+		Code        string `json:"code"`
+		Instruction string `json:"instruction"`
+		ExpiresIn   int    `json:"expires_in"`
+	}
+	channelAPIRequest(t, server.URL, http.MethodPost, "/api/channels/telegram/connect", nil, "", http.StatusOK, &issued)
+	if issued.Provider != "telegram" || issued.Mode != "deep_link" || !strings.Contains(issued.URL, issued.Code) || issued.ExpiresIn != 600 {
+		t.Fatalf("connect response = %#v", issued)
+	}
+	identity := channel.ConnectionIdentity{Provider: "telegram", WorkspaceID: "7", ExternalUserID: "7", ExternalUserName: "alice"}
+	bound, err := state.Connect(context.Background(), issued.Code, identity, time.Now())
+	if err != nil || bound.UserID != "local" {
+		t.Fatalf("Connect() = %#v, %v", bound, err)
+	}
+	var providers struct {
+		Enabled   bool                      `json:"enabled"`
+		Providers []channelProviderResource `json:"providers"`
+	}
+	channelAPIRequest(t, server.URL, http.MethodGet, "/api/channels/providers", nil, "", http.StatusOK, &providers)
+	if !providers.Enabled || len(providers.Providers) != 1 || providers.Providers[0].ConnectionStatus != "connected" {
+		t.Fatalf("providers = %#v", providers)
+	}
+	var connections struct {
+		Connections []channel.Binding `json:"connections"`
+	}
+	channelAPIRequest(t, server.URL, http.MethodGet, "/api/channels/connections", nil, "", http.StatusOK, &connections)
+	if len(connections.Connections) != 1 {
+		t.Fatalf("connections = %#v", connections)
+	}
+	channelAPIRequest(t, server.URL, http.MethodDelete, "/api/channels/connections/"+bound.ID, nil, "", http.StatusNoContent, nil)
+	channelAPIRequest(t, server.URL, http.MethodPost, "/api/channels/github/connect", nil, "", http.StatusNotFound, nil)
+}
+
 func TestChannelDispatcherFailsClosedOnForeignMappingAndAnyActiveRun(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -351,6 +530,88 @@ func TestChannelDispatcherFailsClosedOnForeignMappingAndAnyActiveRun(t *testing.
 	}
 }
 
+func TestChannelDispatcherControlCommands(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	repository := store.NewMemory()
+	state := channel.NewMemoryState()
+	binding, _ := channel.NewBinding("alice", channel.SlackProvider, "team", "U1", now)
+	binding, _ = state.Bind(ctx, binding)
+	controls, _ := control.NewService(control.NewInMemory(), func() time.Time { return now })
+	memories := memory.NewInMemory()
+	if err := memories.Upsert(ctx, memory.Entry{
+		ID: "fact", Scope: memory.Scope{UserID: "alice"}, Text: "Remember this",
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{
+		store: repository, controls: controls, memories: memories,
+		config: config.Config{Models: []config.ModelConfig{{Name: "primary"}, {Name: "fast"}}},
+	}
+	dispatcher := channelDispatcher{service: service, state: state}
+	request := channel.Request{
+		Identity: channel.Identity{BindingID: binding.ID, UserID: "alice"},
+		Message:  channel.Message{Provider: channel.SlackProvider, WorkspaceID: "team", ExternalUserID: "U1", ChatID: "chat"},
+	}
+	command := func(text string) channel.Reply {
+		t.Helper()
+		request.Message.Text = text
+		reply, err := dispatcher.Dispatch(ctx, request)
+		if err != nil {
+			t.Fatalf("Dispatch(%q) = %v", text, err)
+		}
+		return reply
+	}
+	if reply := command("/status"); reply.Text != "No active conversation." {
+		t.Fatalf("status = %q", reply.Text)
+	}
+	first := command("/new")
+	if first.Text != "New conversation started." {
+		t.Fatalf("new = %q", first.Text)
+	}
+	mapped, err := state.Conversation(ctx, binding.ID, "chat", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply := command("/status"); reply.Text != "Active thread: "+string(mapped.ThreadID) {
+		t.Fatalf("status = %q", reply.Text)
+	}
+	if reply := command("/models"); reply.Text != "Available models:\n• primary\n• fast" {
+		t.Fatalf("models = %q", reply.Text)
+	}
+	if reply := command("/memory"); reply.Text != "Memory contains 1 fact(s)." {
+		t.Fatalf("memory = %q", reply.Text)
+	}
+	if _, err = controls.SetGoal(ctx, mapped.ThreadID, "Ship it", 0); err != nil {
+		t.Fatal(err)
+	}
+	if reply := command("/goal"); reply.Text != "Goal: Ship it" {
+		t.Fatalf("goal = %q", reply.Text)
+	}
+	if reply := command("/goal reset"); reply.Text != "Goal cleared." {
+		t.Fatalf("goal clear = %q", reply.Text)
+	}
+	if reply := command("/goal"); reply.Text != "No active goal." {
+		t.Fatalf("cleared goal = %q", reply.Text)
+	}
+	if reply := command("/help"); !strings.Contains(reply.Text, "/<skill-name>") {
+		t.Fatalf("help = %q", reply.Text)
+	}
+	if reply := command("/missing task"); !strings.HasPrefix(reply.Text, "Unknown command: /missing.") {
+		t.Fatalf("unknown = %q", reply.Text)
+	}
+	second := command("/new")
+	if second.Text != "New conversation started." {
+		t.Fatalf("new conversation reply = %q", second.Text)
+	}
+	replaced, err := state.Conversation(ctx, binding.ID, "chat", "")
+	if err != nil || replaced.ThreadID == mapped.ThreadID {
+		t.Fatalf("remapped = %#v, %v", replaced, err)
+	}
+}
+
 func TestChannelAssistantSelectionTrustsOnlyGitHubSubscriptions(t *testing.T) {
 	t.Parallel()
 	github := channel.Message{Provider: "github", Metadata: map[string]string{"assistant_id": "reviewer"}}
@@ -360,6 +621,50 @@ func TestChannelAssistantSelectionTrustsOnlyGitHubSubscriptions(t *testing.T) {
 	}
 	if got := channelAssistantID(webhook, "primary"); got != "primary" {
 		t.Fatalf("untrusted webhook assistant = %q", got)
+	}
+}
+
+func TestChannelProtocolHelpers(t *testing.T) {
+	t.Parallel()
+	displayNames := map[string]string{
+		channel.TelegramProvider: "Telegram", channel.SlackProvider: "Slack",
+		channel.DiscordProvider: "Discord", channel.FeishuProvider: "Feishu",
+		channel.DingTalkProvider: "DingTalk", channel.WeComProvider: "WeCom",
+		channel.WeChatProvider: "WeChat", channel.BuzzProvider: "Buzz", "custom": "custom",
+	}
+	for provider, want := range displayNames {
+		if got := channelProviderDisplayName(provider); got != want {
+			t.Fatalf("channelProviderDisplayName(%q) = %q", provider, got)
+		}
+	}
+	if channelConnectionMode(channel.TelegramProvider) != "deep_link" || channelConnectionMode(channel.SlackProvider) != "binding_code" {
+		t.Fatal("unexpected channel connection mode")
+	}
+	if !containsString([]string{"discord", "slack", "telegram"}, "slack") || containsString([]string{"discord", "slack"}, "telegram") {
+		t.Fatal("containsString returned an unexpected result")
+	}
+
+	input, err := channelRunInput(channel.Message{Text: "review", Attachments: []channel.Attachment{{Name: "report.pdf", MediaType: "application/pdf", URL: "https://example.test/report.pdf", Size: 42}}})
+	if err != nil || !bytes.Contains(input, []byte("channel_attachments")) || !bytes.Contains(input, []byte("report.pdf")) {
+		t.Fatalf("channelRunInput() = %s, %v", input, err)
+	}
+
+	errorsToStatus := []struct {
+		err    error
+		status int
+	}{
+		{channel.ErrInvalid, http.StatusBadRequest},
+		{channel.ErrNotFound, http.StatusNotFound},
+		{channel.ErrConflict, http.StatusConflict},
+		{channel.ErrBusy, http.StatusTooManyRequests},
+		{errors.New("storage failure"), http.StatusInternalServerError},
+	}
+	for _, test := range errorsToStatus {
+		recorder := httptest.NewRecorder()
+		writeChannelError(recorder, test.err)
+		if recorder.Code != test.status {
+			t.Fatalf("writeChannelError(%v) = %d, want %d", test.err, recorder.Code, test.status)
+		}
 	}
 }
 

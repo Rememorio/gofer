@@ -1,0 +1,21 @@
+config_version: 1
+
+server:
+  address: 0.0.0.0:8001
+
+storage:
+  driver: sqlite
+  dsn: /var/lib/gofer/gofer.db
+
+workspace:
+  root: /var/lib/gofer/workspaces
+
+sandbox:
+  driver: local
+  allow_host_execution: false
+
+models:
+  - name: primary
+    provider: openai
+    model: gpt-5
+    api_key: $OPENAI_API_KEY

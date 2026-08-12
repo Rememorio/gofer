@@ -177,6 +177,13 @@ func TestWeComNormalizationVariantsAndSendErrors(t *testing.T) {
 			t.Fatalf("unexpected accepted body %#v", body)
 		}
 	}
+	connectBody, _ := json.Marshal(map[string]any{
+		"msgid": "connect", "from": map[string]string{"userid": "blocked"},
+		"msgtype": "text", "text": map[string]string{"content": "/connect code"},
+	})
+	if message, _, keep := provider.normalize(weComFrame{Headers: weComHeaders{RequestID: "r"}, Body: connectBody}); !keep || message.Text != "/connect code" {
+		t.Fatalf("disallowed connect = %#v, %v", message, keep)
+	}
 	for _, reply := range []Reply{{}, {Provider: WeComProvider, ChatID: "user", Text: "x"}, {Provider: "other", ChatID: "user", InReplyTo: "m", Text: "x"}} {
 		if err := provider.Send(context.Background(), reply); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("Send(%#v) = %v", reply, err)

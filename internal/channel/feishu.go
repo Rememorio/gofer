@@ -188,10 +188,14 @@ func (provider *Feishu) normalize(event *larkim.P2MessageReceiveV1) (Message, bo
 	}
 	userID := firstValue(source.SenderId.OpenId, source.SenderId.UserId, source.SenderId.UnionId)
 	messageID, chatID := value(incoming.MessageId), value(incoming.ChatId)
-	if userID == "" || messageID == "" || chatID == "" || !allowed(provider.allowedUsers, userID) {
+	if userID == "" || messageID == "" || chatID == "" {
 		return Message{}, false
 	}
 	text, attachments := parseFeishuContent(value(incoming.Content))
+	_, connecting := ParseConnectCommand(text, FeishuProvider)
+	if !connecting && !allowed(provider.allowedUsers, userID) {
+		return Message{}, false
+	}
 	if text == "" && len(attachments) == 0 {
 		return Message{}, false
 	}

@@ -173,6 +173,8 @@ channels:
   telegram:
     enabled: false
     bot_token: ""
+    # Optional; enables a t.me deep link in the connection API.
+    bot_username: ""
     allowed_users: []
     poll_timeout_seconds: 30
     request_timeout_seconds: 45

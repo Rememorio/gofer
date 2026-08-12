@@ -138,6 +138,10 @@ func TestFeishuNormalizationFiltersAndContent(t *testing.T) {
 			t.Fatalf("unexpected accepted event %#v", event)
 		}
 	}
+	connecting := feishuTestEvent("blocked", "connect", "c", "p2p", `{"text":"/connect code"}`)
+	if message, accepted := provider.normalize(connecting); !accepted || message.Text != "/connect code" {
+		t.Fatalf("disallowed connect = %#v, %v", message, accepted)
+	}
 	if text, attachments := parseFeishuContent("not-json"); text != "" || attachments != nil {
 		t.Fatalf("invalid content = %q, %#v", text, attachments)
 	}

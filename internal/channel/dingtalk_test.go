@@ -152,6 +152,11 @@ func TestDingTalkNormalizeFiltersAndAttachments(t *testing.T) {
 			t.Fatalf("unexpected accepted callback %#v", callback)
 		}
 	}
+	connecting := dingTalkTestCallback(dingTalkConversationP2P)
+	connecting.SenderStaffId, connecting.Text.Content = "other", "/connect code"
+	if message, _, accepted := provider.normalize(connecting); !accepted || message.Text != "/connect code" {
+		t.Fatalf("disallowed connect = %#v, %v", message, accepted)
+	}
 	if _, err := provider.handleCallback(context.Background(), dingTalkTestCallback(dingTalkConversationP2P)); !errors.Is(err, ErrClosed) {
 		t.Fatalf("callback before Start = %v", err)
 	}

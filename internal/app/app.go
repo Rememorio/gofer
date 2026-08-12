@@ -485,6 +485,7 @@ func (service *Service) Start(ctx context.Context, launch gateway.StartRequest) 
 	if principal, ok := auth.PrincipalFromContext(ctx); ok {
 		runContext = auth.WithPrincipal(runContext, principal)
 	}
+	runContext = inheritChannelContext(runContext, ctx)
 	runContext, cancel := context.WithCancel(runContext)
 	service.mu.Lock()
 	if _, exists := service.active[launch.RunID]; exists {
@@ -534,7 +535,7 @@ func (service *Service) execute(ctx context.Context, launch gateway.StartRequest
 		defer func() { _ = baseline.Close() }()
 	}
 	deliveryTracker := delivery.NewTracker()
-	registry, middleware, children, err := service.buildTools(threadWorkspace, launch, provider, deliveryTracker)
+	registry, middleware, children, err := service.buildTools(ctx, threadWorkspace, launch, provider, deliveryTracker)
 	if err != nil {
 		service.failPending(launch, err)
 		return
@@ -549,6 +550,12 @@ func (service *Service) execute(ctx context.Context, launch gateway.StartRequest
 	}
 	if service.skills != nil {
 		settings.system = strings.TrimSpace(settings.system + "\n\n" + service.skills.IndexPrompt())
+	}
+	if channelBootstrap(ctx) {
+		settings.system = strings.TrimSpace(settings.system + "\n\n" + channelBootstrapPrompt)
+	}
+	if activation, ok := channelSkill(ctx); ok {
+		settings.system = strings.TrimSpace(settings.system + "\n\n" + channelSkillPrompt(activation))
 	}
 	if settings.disableClarification {
 		ctx = humaninput.WithDisabled(ctx)
@@ -602,7 +609,7 @@ func (service *Service) prepareConversation(ctx context.Context, launch gateway.
 	return combined, nil
 }
 
-func (service *Service) buildTools(threadWorkspace *workspace.Thread, launch gateway.StartRequest, provider configuredProvider, observers ...runtime.Middleware) (*tool.Registry, []runtime.Middleware, *subagent.Manager, error) {
+func (service *Service) buildTools(ctx context.Context, threadWorkspace *workspace.Thread, launch gateway.StartRequest, provider configuredProvider, observers ...runtime.Middleware) (*tool.Registry, []runtime.Middleware, *subagent.Manager, error) {
 	registry := tool.NewRegistry()
 	if err := service.registerCoreTools(registry, threadWorkspace, launch); err != nil {
 		return nil, nil, nil, err
@@ -613,7 +620,7 @@ func (service *Service) buildTools(threadWorkspace *workspace.Thread, launch gat
 	if err := registry.Register(humaninput.Tool()); err != nil {
 		return nil, nil, nil, err
 	}
-	children, err := service.newSubagents(threadWorkspace, launch, provider, observers)
+	children, err := service.newSubagents(ctx, threadWorkspace, launch, provider, observers)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -644,7 +651,7 @@ func (service *Service) registerCoreTools(registry *tool.Registry, threadWorkspa
 	if err != nil {
 		return err
 	}
-	commandTool, err := (sandbox.CommandTool{Executor: executor}).Tool()
+	commandTool, err := (sandbox.CommandTool{Executor: executor, Environment: channelCommandEnvironment}).Tool()
 	if err != nil {
 		return err
 	}

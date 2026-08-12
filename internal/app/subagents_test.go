@@ -32,7 +32,7 @@ func TestSubagentToolsRunIsolatedChildAgent(t *testing.T) {
 		{Kind: model.ChunkTextDelta, Text: "child result"},
 		{Kind: model.ChunkDone, StopReason: model.StopEndTurn},
 	}}}
-	registry, _, children, err := service.buildTools(workspace, launch, configuredProvider{provider: provider, model: "test"})
+	registry, _, children, err := service.buildTools(context.Background(), workspace, launch, configuredProvider{provider: provider, model: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,19 +257,19 @@ func TestBuildToolsClosesChildrenOnAssemblyErrors(t *testing.T) {
 	provider := service.providers["primary"]
 	controls := service.controls
 	service.controls = nil
-	if _, _, _, err := service.buildTools(threadWorkspace, launch, provider); err == nil {
+	if _, _, _, err := service.buildTools(context.Background(), threadWorkspace, launch, provider); err == nil {
 		t.Fatal("buildTools(nil controls) error = nil")
 	}
 	service.controls = controls
 	maxSubagents := service.config.Runtime.MaxSubagents
 	service.config.Runtime.MaxSubagents = 0
-	if _, _, _, err := service.buildTools(threadWorkspace, launch, provider); err == nil {
+	if _, _, _, err := service.buildTools(context.Background(), threadWorkspace, launch, provider); err == nil {
 		t.Fatal("buildTools(invalid children) error = nil")
 	}
 	service.config.Runtime.MaxSubagents = maxSubagents
 	service.config.ReadBeforeWrite.Enabled = false
 	service.config.LoopDetection.Enabled = false
-	_, middleware, children, err := service.buildTools(threadWorkspace, launch, provider)
+	_, middleware, children, err := service.buildTools(context.Background(), threadWorkspace, launch, provider)
 	if err != nil {
 		t.Fatal(err)
 	}

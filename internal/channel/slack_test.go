@@ -139,6 +139,12 @@ func TestSlackNormalizeFiltersAndAttachments(t *testing.T) {
 			t.Fatalf("filtered event accepted: %#v", event)
 		}
 	}
+	connect, keep := provider.normalize(slackEventPayload{Team: "T", Event: slackEvent{
+		Type: "message", User: "other", Channel: "C", Timestamp: "2", Text: "/connect code",
+	}})
+	if !keep || connect.Text != "/connect code" {
+		t.Fatalf("disallowed connect = %#v, %v", connect, keep)
+	}
 	if got := stripSlackMention("<@!BOT> hi", "BOT"); got != "hi" {
 		t.Fatalf("strip mention = %q", got)
 	}

@@ -16,19 +16,10 @@ import (
 func TestTelegramLongPollingLifecycle(t *testing.T) {
 	t.Parallel()
 	var polls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		switch {
-		case strings.HasSuffix(request.URL.Path, "/getMe"):
-			_, _ = writer.Write([]byte(`{"ok":true,"result":{"id":99,"is_bot":true}}`))
-		case strings.HasSuffix(request.URL.Path, "/getUpdates"):
-			if polls.Add(1) == 1 {
-				_, _ = writer.Write([]byte(`{"ok":true,"result":[{"update_id":50,"message":{"message_id":12,"date":1700000000,"from":{"id":7,"username":"alice"},"chat":{"id":-9,"type":"group"},"text":"hello","photo":[{"file_id":"small","file_unique_id":"s","file_size":1},{"file_id":"large/id","file_unique_id":"l","file_size":10}]}}]}`))
-				return
-			}
-			<-request.Context().Done()
-		}
-	}))
+	releasePoll := make(chan struct{})
+	server := httptest.NewServer(telegramLifecycleHandler(&polls, releasePoll))
 	defer server.Close()
+	defer close(releasePoll)
 	provider, err := NewTelegram(TelegramConfig{
 		BotToken: "secret", AllowedUsers: []string{"7"}, PollTimeout: time.Second,
 		RequestTimeout: 2 * time.Second, Client: server.Client(), BaseURL: server.URL,
@@ -66,6 +57,24 @@ func TestTelegramLongPollingLifecycle(t *testing.T) {
 	if err = provider.Start(context.Background(), func(context.Context, Message) error { return nil }); !errors.Is(err, ErrClosed) {
 		t.Fatalf("Start after close = %v", err)
 	}
+}
+
+func telegramLifecycleHandler(polls *atomic.Int32, releasePoll <-chan struct{}) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case strings.HasSuffix(request.URL.Path, "/getMe"):
+			_, _ = writer.Write([]byte(`{"ok":true,"result":{"id":99,"is_bot":true}}`))
+		case strings.HasSuffix(request.URL.Path, "/getUpdates"):
+			if polls.Add(1) == 1 {
+				_, _ = writer.Write([]byte(`{"ok":true,"result":[{"update_id":50,"message":{"message_id":12,"date":1700000000,"from":{"id":7,"username":"alice"},"chat":{"id":-9,"type":"group"},"text":"hello","photo":[{"file_id":"small","file_unique_id":"s","file_size":1},{"file_id":"large/id","file_unique_id":"l","file_size":10}]}}]}`))
+				return
+			}
+			select {
+			case <-request.Context().Done():
+			case <-releasePoll:
+			}
+		}
+	})
 }
 
 func TestTelegramPollingRetainsBusyUpdate(t *testing.T) {
@@ -139,6 +148,12 @@ func TestTelegramNormalizeAndValidation(t *testing.T) {
 	}
 	if _, keep = provider.normalize(telegramUpdate{Message: &telegramMessage{From: &telegramUser{ID: 2}, Chat: telegramChat{ID: 1}, Text: "no"}}); keep {
 		t.Fatal("disallowed user accepted")
+	}
+	connect, keep := provider.normalize(telegramUpdate{Message: &telegramMessage{
+		MessageID: 3, From: &telegramUser{ID: 2}, Chat: telegramChat{ID: 1, Type: "private"}, Text: "/start code",
+	}})
+	if !keep || connect.Text != "/start code" {
+		t.Fatalf("disallowed connect = %#v, %v", connect, keep)
 	}
 	if _, keep = provider.normalize(telegramUpdate{Message: &telegramMessage{From: &telegramUser{ID: 1, IsBot: true}}}); keep {
 		t.Fatal("bot accepted")
