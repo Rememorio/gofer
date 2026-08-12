@@ -71,3 +71,35 @@ func TestFromEventsSkipsNonMessagesAndMalformedPayloads(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSeedCreatesTerminalBranchHistory(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repository := store.NewMemory()
+	now := time.Now().UTC()
+	thread, _ := domain.NewThread(now)
+	if err := repository.CreateThread(ctx, thread); err != nil {
+		t.Fatal(err)
+	}
+	user, _ := domain.NewTextMessage(domain.RoleUser, "question", now.Add(-time.Hour))
+	assistant, _ := domain.NewTextMessage(domain.RoleAssistant, "answer", now.Add(-time.Hour+time.Second))
+	runID, err := Seed(ctx, repository, thread.ID, []domain.Message{user, assistant}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := repository.Run(ctx, runID)
+	if err != nil || !run.Terminal() || run.Status != domain.RunSucceeded {
+		t.Fatalf("run = %#v, %v", run, err)
+	}
+	messages, err := Load(ctx, repository, thread.ID)
+	if err != nil || len(messages) != 2 || messages[1].ID != assistant.ID {
+		t.Fatalf("messages = %#v, %v", messages, err)
+	}
+	records, _ := repository.Events(ctx, runID, 0, 0)
+	if len(records) != 5 || records[len(records)-1].Kind != event.RunCompleted {
+		t.Fatalf("events = %#v", records)
+	}
+	if _, err = Seed(ctx, repository, thread.ID, []domain.Message{{}}, now); err == nil {
+		t.Fatal("invalid seed succeeded")
+	}
+}

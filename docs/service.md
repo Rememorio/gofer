@@ -90,7 +90,17 @@ GET  /api/threads/{thread_id}/runs
 GET  /api/threads/{thread_id}/runs/{run_id}/messages
 PATCH /api/threads/{thread_id}
 DELETE /api/threads/{thread_id}
+POST /api/threads/{thread_id}/branches
 ```
+
+The branch request accepts `message_id`, the compatible `message_ids` list,
+and an optional `title`. The selected message must be a completed assistant
+turn and the source thread must have no active run. The new thread receives an
+independent terminal history seed through that turn. A latest-turn branch
+atomically clones workspace, upload, and output files; a historical branch
+reports `skipped_historical_turn` and starts with an empty workspace so newer
+files cannot appear in older conversation state. The response exposes both
+the source identifiers and the workspace/history modes.
 
 Run events are available as JSON or resumable server-sent events:
 

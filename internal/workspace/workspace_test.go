@@ -200,6 +200,91 @@ func TestManagerRemovesOnlyValidatedThreadWorkspace(t *testing.T) {
 	}
 }
 
+func TestManagerClonesWorkspaceAtomically(t *testing.T) {
+	t.Parallel()
+	manager, err := NewManager(Config{Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceID, _ := domain.NewThreadID()
+	targetID, _ := domain.NewThreadID()
+	source, err := manager.Open(sourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = source.WriteFile(WorkspaceRoot+"/nested/file.txt", []byte("working"), false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = source.PutUpload("input.txt", strings.NewReader("upload")); err != nil {
+		t.Fatal(err)
+	}
+	if err = source.WriteFile(OutputsRoot+"/result.txt", []byte("output"), false); err != nil {
+		t.Fatal(err)
+	}
+	_ = source.Close()
+
+	if err = manager.Clone(sourceID, targetID); err != nil {
+		t.Fatalf("Clone(): %v", err)
+	}
+	target, err := manager.Open(targetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = target.Close() }()
+	for virtualPath, want := range map[string]string{
+		WorkspaceRoot + "/nested/file.txt": "working",
+		UploadsRoot + "/input.txt":         "upload",
+		OutputsRoot + "/result.txt":        "output",
+	} {
+		result, readErr := target.ReadFile(virtualPath, ReadOptions{})
+		if readErr != nil || result.Content != want {
+			t.Fatalf("ReadFile(%q) = %#v, %v", virtualPath, result, readErr)
+		}
+	}
+	if err = manager.Clone(sourceID, targetID); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("Clone(existing target) = %v, want fs.ErrExist", err)
+	}
+}
+
+func TestManagerCloneRejectsUnsafeTrees(t *testing.T) {
+	t.Parallel()
+	manager, err := NewManager(Config{Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceID, _ := domain.NewThreadID()
+	targetID, _ := domain.NewThreadID()
+	source, err := manager.Open(sourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = source.Close()
+	link := filepath.Join(manager.root, "threads", string(sourceID), "user-data", "workspace", "link")
+	if err = os.Symlink(t.TempDir(), link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err = manager.Clone(sourceID, targetID); !errors.Is(err, ErrNotRegular) {
+		t.Fatalf("Clone(symlink) = %v, want ErrNotRegular", err)
+	}
+	if _, err = os.Stat(filepath.Join(manager.root, "threads", string(targetID), "user-data")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("failed clone published target: %v", err)
+	}
+	missingID, _ := domain.NewThreadID()
+	if err = manager.Clone(missingID, targetID); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("Clone(missing source) = %v, want fs.ErrNotExist", err)
+	}
+	if err = manager.Clone(sourceID, sourceID); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("Clone(same ID) = %v, want ErrInvalidConfig", err)
+	}
+	if err = manager.Clone(domain.ThreadID("bad"), targetID); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("Clone(invalid ID) = %v, want ErrInvalidConfig", err)
+	}
+	var nilManager *Manager
+	if err = nilManager.Clone(sourceID, targetID); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("Clone(nil manager) = %v, want ErrInvalidConfig", err)
+	}
+}
+
 func TestWorkspaceConcurrentUploadsAreCollisionFree(t *testing.T) {
 	t.Parallel()
 

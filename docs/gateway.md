@@ -18,6 +18,9 @@ store interface, so transport code does not own model or database behavior.
 - `GET /api/threads/{thread_id}/state`, `/messages`, and `/runs` expose durable
   conversation state. Run-scoped `/messages` returns the messages produced by
   one execution.
+- `POST /api/threads/{thread_id}/branches` creates an owner-scoped conversation
+  from a completed assistant turn. Its copied journal and optional latest
+  workspace are independent from the source after creation.
 - `POST /api/threads/{thread_id}/runs` persists a pending run and its first
   `run.created` event, then hands a validated DeerFlow launch envelope to the
   configured starter.
@@ -52,6 +55,13 @@ merges the request's non-overlapping suffix, so clients may send only the new
 turn or a compatible history window without duplicating context. The normal
 context-window middleware still compacts long conversations before each model
 call.
+
+Branching writes the selected conversation prefix as a synthetic successful
+run in the new thread. Latest-turn branches copy the entire user-data tree via
+a bounded staging directory and atomic rename. Historical branches deliberately
+skip that copy because the current files may have been created after the
+selected message. Clone failures remove the newly created target without
+changing source history or files.
 
 The launch envelope supports input, command, assistant, metadata, config,
 context, checkpoint, interrupt, stream, disconnect, and multitask fields.

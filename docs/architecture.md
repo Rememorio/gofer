@@ -33,7 +33,7 @@ Planned package groups:
 | --- | --- |
 | `internal/runtime` | Run state machine, model/tool loop, cancellation, limits |
 | `internal/contextwindow` | Boundary-safe conversation compaction and summaries |
-| `internal/conversation` | Cross-run history reconstruction, overlap merging, and input journaling |
+| `internal/conversation` | Cross-run history reconstruction, branching, overlap merging, and input journaling |
 | `internal/control` | Optimistic per-thread goals and ordered todo plans |
 | `internal/event` | Typed immutable events and ordered journal contracts |
 | `internal/thread` | Threads, messages, history, and checkpoints |
@@ -75,3 +75,4 @@ Planned package groups:
 14. Non-public HTTP routes fail closed when authentication or permission is absent.
 15. Scheduled work is dispatched only under an expiring owner lease.
 16. Durable thread state and files never cross an authenticated owner boundary.
+17. Conversation branches never mutate their source or expose files newer than the selected turn.

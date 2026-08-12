@@ -4,6 +4,7 @@ package conversation
 import (
 	"context"
 	"reflect"
+	"time"
 
 	"github.com/Rememorio/gofer/internal/domain"
 	"github.com/Rememorio/gofer/internal/event"
@@ -32,6 +33,57 @@ func Load(ctx context.Context, repository store.Store, threadID domain.ThreadID)
 		}
 	}
 	return messages, nil
+}
+
+// Seed creates one terminal synthetic run containing a validated history.
+func Seed(ctx context.Context, repository store.Store, threadID domain.ThreadID, messages []domain.Message, at time.Time) (domain.RunID, error) {
+	for _, message := range messages {
+		if err := message.Validate(); err != nil {
+			return "", err
+		}
+	}
+	run, err := domain.NewRun(threadID, at)
+	if err == nil {
+		err = repository.CreateRun(ctx, run)
+	}
+	if err != nil {
+		return "", err
+	}
+	created, err := event.NewDraft(threadID, run.ID, event.RunCreated, at, map[string]any{"synthetic": "branch"})
+	if err == nil {
+		_, err = repository.Append(ctx, run.ID, 0, created)
+	}
+	if err == nil {
+		run, err = repository.TransitionRun(ctx, run.ID, domain.RunPending, domain.RunRunning, at.Add(time.Nanosecond), "")
+	}
+	if err != nil {
+		return run.ID, err
+	}
+	started, _ := event.NewDraft(threadID, run.ID, event.RunStarted, run.StartedAt, map[string]any{"attempt": run.Attempt, "synthetic": true})
+	committed, err := repository.Append(ctx, run.ID, 1, started)
+	if err != nil {
+		return run.ID, err
+	}
+	sequence := committed[len(committed)-1].Sequence
+	for index, message := range messages {
+		draft, draftErr := event.NewDraft(threadID, run.ID, event.MessageCompleted, at.Add(time.Duration(index+2)*time.Nanosecond), map[string]any{"message": message, "seeded": true})
+		if draftErr != nil {
+			return run.ID, draftErr
+		}
+		committed, err = repository.Append(ctx, run.ID, sequence, draft)
+		if err != nil {
+			return run.ID, err
+		}
+		sequence = committed[len(committed)-1].Sequence
+	}
+	finishedAt := at.Add(time.Duration(len(messages)+2) * time.Nanosecond)
+	run, err = repository.TransitionRun(ctx, run.ID, domain.RunRunning, domain.RunSucceeded, finishedAt, "")
+	if err != nil {
+		return run.ID, err
+	}
+	finished, _ := event.NewDraft(threadID, run.ID, event.RunCompleted, run.FinishedAt, map[string]any{"synthetic": "branch", "messages": len(messages)})
+	_, err = repository.Append(ctx, run.ID, sequence, finished)
+	return run.ID, err
 }
 
 // LoadRun returns validated messages recorded by one run.

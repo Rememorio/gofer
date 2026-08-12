@@ -31,11 +31,13 @@ const (
 	// OutputsRoot contains user-facing generated artifacts.
 	OutputsRoot = VirtualRoot + "/outputs"
 
-	defaultMaxReadBytes   = 1 << 20
-	defaultMaxWriteBytes  = 80 << 10
-	defaultMaxUploadBytes = 32 << 20
-	defaultMaxResults     = 200
-	maxResultsLimit       = 1000
+	defaultMaxReadBytes         = 1 << 20
+	defaultMaxWriteBytes        = 80 << 10
+	defaultMaxUploadBytes       = 32 << 20
+	defaultMaxResults           = 200
+	maxResultsLimit             = 1000
+	maxCloneFiles               = 10_000
+	maxCloneBytes         int64 = 1 << 30
 )
 
 var (
@@ -223,6 +225,106 @@ func (manager *Manager) Open(threadID domain.ThreadID) (*Thread, error) {
 		maxReadBytes: manager.maxReadBytes, maxWriteBytes: manager.maxWriteBytes,
 		maxUploadBytes: manager.maxUploadBytes,
 	}, nil
+}
+
+// Clone copies one complete thread user-data tree into a fresh target. The
+// clone is assembled in a staging directory and published atomically so a
+// failed copy never exposes partial files.
+func (manager *Manager) Clone(sourceID, targetID domain.ThreadID) error {
+	if manager == nil {
+		return fmt.Errorf("%w: manager is nil", ErrInvalidConfig)
+	}
+	for _, threadID := range []domain.ThreadID{sourceID, targetID} {
+		if _, err := domain.ParseThreadID(string(threadID)); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalidConfig, err)
+		}
+	}
+	if sourceID == targetID {
+		return fmt.Errorf("%w: source and target must differ", ErrInvalidConfig)
+	}
+	source := filepath.Join(manager.root, "threads", string(sourceID), "user-data")
+	targetParent := filepath.Join(manager.root, "threads", string(targetID))
+	target := filepath.Join(targetParent, "user-data")
+	if _, err := os.Lstat(target); err == nil {
+		return fs.ErrExist
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("inspect clone target: %w", err)
+	}
+	if err := os.MkdirAll(targetParent, 0o700); err != nil {
+		return fmt.Errorf("prepare clone target: %w", err)
+	}
+	published := false
+	defer func() {
+		if !published {
+			_ = os.RemoveAll(targetParent)
+		}
+	}()
+	staging, err := os.MkdirTemp(targetParent, ".user-data-clone-")
+	if err != nil {
+		return fmt.Errorf("create clone staging directory: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(staging) }()
+	if err = cloneTree(source, staging); err != nil {
+		return err
+	}
+	if err = os.Rename(staging, target); err != nil {
+		return fmt.Errorf("publish workspace clone: %w", err)
+	}
+	published = true
+	return nil
+}
+
+func cloneTree(source, target string) error {
+	sourceRoot, err := os.OpenRoot(source)
+	if err != nil {
+		return fmt.Errorf("open clone source: %w", err)
+	}
+	defer func() { _ = sourceRoot.Close() }()
+	var files int
+	var bytesCopied int64
+	err = fs.WalkDir(sourceRoot.FS(), ".", func(sourcePath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		targetPath := filepath.Join(target, filepath.FromSlash(sourcePath))
+		if entry.IsDir() {
+			if sourcePath == "." {
+				return nil
+			}
+			return os.Mkdir(targetPath, 0o700)
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("%w: %s", ErrNotRegular, sourcePath)
+		}
+		files++
+		bytesCopied += info.Size()
+		if files > maxCloneFiles || bytesCopied > maxCloneBytes {
+			return ErrTooLarge
+		}
+		return cloneFile(sourceRoot, sourcePath, targetPath)
+	})
+	if err != nil {
+		return fmt.Errorf("clone workspace: %w", err)
+	}
+	return nil
+}
+
+func cloneFile(source *os.Root, sourceName, target string) error {
+	reader, err := source.Open(sourceName)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = reader.Close() }()
+	writer, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(writer, reader)
+	return errors.Join(copyErr, writer.Close())
 }
 
 // Remove deletes one validated thread workspace tree.

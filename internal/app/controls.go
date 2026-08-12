@@ -29,7 +29,7 @@ func (service *Service) getThreadGoal(writer http.ResponseWriter, request *http.
 }
 
 func (service *Service) setThreadGoal(writer http.ResponseWriter, request *http.Request) {
-	thread, err := service.mutableControlThread(request)
+	thread, err := service.mutableThread(request)
 	if err != nil {
 		writeControlError(writer, err)
 		return
@@ -50,7 +50,7 @@ func (service *Service) setThreadGoal(writer http.ResponseWriter, request *http.
 }
 
 func (service *Service) clearThreadGoal(writer http.ResponseWriter, request *http.Request) {
-	thread, err := service.mutableControlThread(request)
+	thread, err := service.mutableThread(request)
 	if err == nil {
 		_, err = service.controls.ClearGoal(request.Context(), thread.ID)
 	}
@@ -71,7 +71,7 @@ func (service *Service) getThreadControl(writer http.ResponseWriter, request *ht
 }
 
 func (service *Service) replaceThreadTodos(writer http.ResponseWriter, request *http.Request) {
-	thread, err := service.mutableControlThread(request)
+	thread, err := service.mutableThread(request)
 	if err != nil {
 		writeControlError(writer, err)
 		return
@@ -98,7 +98,7 @@ func (service *Service) ownedControlState(request *http.Request) (control.State,
 	return service.controls.Snapshot(request.Context(), thread.ID)
 }
 
-func (service *Service) mutableControlThread(request *http.Request) (domain.Thread, error) {
+func (service *Service) mutableThread(request *http.Request) (domain.Thread, error) {
 	thread, err := service.ownedThread(request)
 	if err != nil {
 		return domain.Thread{}, err

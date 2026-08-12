@@ -286,6 +286,7 @@ func (service *Service) openHandler() error {
 	service.schedulerRoutes(apiMux)
 	service.resourceRoutes(apiMux)
 	service.controlRoutes(apiMux)
+	service.branchRoutes(apiMux)
 	service.memoryRoutes(apiMux)
 	var api http.Handler = apiMux
 	if service.config.Auth.Enabled {

@@ -37,6 +37,10 @@ exposed through the same owner-scoped API.
 LangGraph clients can discover configured assistants and use create-and-stream,
 create-and-wait, stateless run, join, and run-scoped message compatibility
 endpoints over the same durable journal.
+Owner-scoped conversations can also branch from any completed assistant turn.
+Gofer seeds an independent durable history and clones the latest workspace
+atomically; historical branches omit newer files to preserve temporal
+consistency.
 The `gofer serve` command now assembles the model provider, durable store,
 isolated workspaces, sandbox, browser, policy, runtime, gateway, graceful
 shutdown, and Prometheus endpoint into a runnable service. MCP tools, projected
