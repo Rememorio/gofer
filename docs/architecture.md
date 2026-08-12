@@ -47,7 +47,8 @@ Planned package groups:
 | `internal/skill` | Skill discovery, validation, activation, and projection |
 | `internal/subagent` | Bounded parallel delegation and event fan-in |
 | `internal/memory` | Scoped retrieval, consolidation, and lifecycle |
-| `internal/store` | SQLite and PostgreSQL persistence adapters |
+| `internal/store` | Core durable store contract and in-memory reference adapter |
+| `internal/store/sqlstore` | Transactional SQLite and PostgreSQL persistence |
 | `internal/gateway` | DeerFlow-compatible REST and SSE transports |
 | `internal/channel` | IM and webhook adapters |
 

@@ -25,6 +25,8 @@ request-level SSRF policy enforcement.
 Long-running task control now includes optimistic goal and todo state,
 hierarchically scoped memory recall, safe conversation compaction, and bounded
 parallel child agents with ordered lifecycle events.
+The durable service boundary now includes DeerFlow-shaped thread and run
+responses, resumable run-event SSE, and transactional SQLite/PostgreSQL stores.
 
 ## Design
 
@@ -46,6 +48,8 @@ isolation and its trust boundaries are documented in
 documented in [Browser automation](docs/browser.md).
 The long-running task primitives are documented in
 [Task control](docs/task-control.md).
+HTTP contracts and persistence behavior are documented in
+[Gateway and persistence](docs/gateway.md).
 
 ## Development
 
