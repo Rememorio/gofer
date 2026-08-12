@@ -22,6 +22,9 @@ fail-closed local driver or hardened ephemeral Docker containers. Stateful,
 thread-scoped browser automation is available through Chrome DevTools Protocol
 with bounded sessions, stable snapshot references, screenshot artifacts, and
 request-level SSRF policy enforcement.
+Long-running task control now includes optimistic goal and todo state,
+hierarchically scoped memory recall, safe conversation compaction, and bounded
+parallel child agents with ordered lifecycle events.
 
 ## Design
 
@@ -41,6 +44,8 @@ and [Roadmap](docs/roadmap.md) for the implementation sequence. Command
 isolation and its trust boundaries are documented in
 [Sandbox](docs/sandbox.md). Browser lifecycle and network boundaries are
 documented in [Browser automation](docs/browser.md).
+The long-running task primitives are documented in
+[Task control](docs/task-control.md).
 
 ## Development
 

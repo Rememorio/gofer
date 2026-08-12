@@ -32,6 +32,8 @@ Planned package groups:
 | Area | Responsibility |
 | --- | --- |
 | `internal/runtime` | Run state machine, model/tool loop, cancellation, limits |
+| `internal/contextwindow` | Boundary-safe conversation compaction and summaries |
+| `internal/control` | Optimistic per-thread goals and ordered todo plans |
 | `internal/event` | Typed immutable events and ordered journal contracts |
 | `internal/thread` | Threads, messages, history, and checkpoints |
 | `internal/model` | Normalized model request, response, stream, and usage types |
@@ -62,3 +64,5 @@ Planned package groups:
 9. Skill packages never follow symlinks and project into an agent-visible read-only tree.
 10. Host command execution is disabled by default; container execution starts from a read-only, capability-free, network-isolated baseline.
 11. Browser navigation and every intercepted HTTP request pass through the same fail-closed address policy.
+12. Child agents have explicit depth, total-count, and parallelism limits and an owned cancellation path.
+13. Long-term memory retrieval never crosses its authenticated user scope.
