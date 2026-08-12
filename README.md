@@ -14,7 +14,10 @@ Gofer is under active development. The engineering foundation, durable core,
 normalized streaming model API, OpenAI-compatible adapter, validated tool
 registry, event-journaled agent loop, traversal-resistant thread workspaces,
 artifact catalog, built-in file tools, and fail-closed policy middleware are in
-place. It is not yet a drop-in DeerFlow replacement.
+place. MCP servers can contribute validated tools over stdio or Streamable
+HTTP, and Skills packages support strict metadata, persistent enablement,
+progressive discovery, and atomic read-only projection. It is not yet a
+drop-in DeerFlow replacement.
 
 ## Design
 

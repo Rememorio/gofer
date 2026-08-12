@@ -62,6 +62,34 @@ func TestRegistryDefinitionsAreSorted(t *testing.T) {
 	}
 }
 
+func TestRegistryRegisterAllIsAtomic(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	alpha := testTool("alpha")
+	if err := registry.RegisterAll(alpha, testTool("beta")); err != nil {
+		t.Fatalf("RegisterAll(): %v", err)
+	}
+	if err := registry.RegisterAll(testTool("gamma"), alpha); !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("RegisterAll(existing duplicate) error = %v, want ErrDuplicate", err)
+	}
+	if len(registry.Definitions()) != 2 {
+		t.Fatalf("definitions after existing duplicate = %#v", registry.Definitions())
+	}
+	if err := registry.RegisterAll(testTool("gamma"), testTool("gamma")); !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("RegisterAll(batch duplicate) error = %v, want ErrDuplicate", err)
+	}
+	if len(registry.Definitions()) != 2 {
+		t.Fatalf("definitions after batch duplicate = %#v", registry.Definitions())
+	}
+	if err := registry.RegisterAll(testTool("gamma"), nil); !errors.Is(err, ErrInvalidDefinition) {
+		t.Fatalf("RegisterAll(nil) error = %v, want ErrInvalidDefinition", err)
+	}
+	if len(registry.Definitions()) != 2 {
+		t.Fatalf("definitions after invalid batch = %#v", registry.Definitions())
+	}
+}
+
 func TestRegistryReturnsModelCorrectableErrors(t *testing.T) {
 	t.Parallel()
 
@@ -142,11 +170,51 @@ func TestRegistryPropagatesHostFailures(t *testing.T) {
 	}
 }
 
+func TestRegistryPreservesStructuredResultErrors(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	structured := json.RawMessage(`{"content":[{"type":"text","text":"remote failed"}],"isError":true}`)
+	if err := registry.Register(Func{
+		DefinitionValue: Definition{Name: "remote", Description: "Remote", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		ExecuteFunc: func(context.Context, json.RawMessage) (json.RawMessage, error) {
+			return nil, NewResultError(structured)
+		},
+	}); err != nil {
+		t.Fatalf("Register(): %v", err)
+	}
+	result, err := registry.Execute(context.Background(), domain.ToolCall{ID: "1", Name: "remote", Arguments: json.RawMessage(`{}`)})
+	if err != nil {
+		t.Fatalf("Execute(): %v", err)
+	}
+	if !result.IsError || string(result.Output) != string(structured) {
+		t.Fatalf("Execute() = %#v", result)
+	}
+
+	invalid := testTool("invalid_error").(Func)
+	invalid.ExecuteFunc = func(context.Context, json.RawMessage) (json.RawMessage, error) {
+		return nil, NewResultError(json.RawMessage(`{`))
+	}
+	if err := registry.Register(invalid); err != nil {
+		t.Fatalf("Register(invalid error): %v", err)
+	}
+	if _, err := registry.Execute(context.Background(), domain.ToolCall{ID: "2", Name: "invalid_error", Arguments: json.RawMessage(`{}`)}); !errors.Is(err, ErrInvalidOutput) {
+		t.Fatalf("Execute(invalid error) error = %v, want ErrInvalidOutput", err)
+	}
+}
+
 func TestFuncWithoutExecutor(t *testing.T) {
 	t.Parallel()
 
 	_, err := (Func{}).Execute(context.Background(), nil)
 	if err == nil {
 		t.Fatal("Execute() error = nil")
+	}
+}
+
+func testTool(name string) Tool {
+	return Func{
+		DefinitionValue: Definition{Name: name, Description: name, InputSchema: json.RawMessage(`{"type":"object"}`)},
+		ExecuteFunc:     func(context.Context, json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{}`), nil },
 	}
 }

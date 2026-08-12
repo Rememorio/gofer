@@ -36,6 +36,7 @@ Planned package groups:
 | `internal/thread` | Threads, messages, history, and checkpoints |
 | `internal/model` | Normalized model request, response, stream, and usage types |
 | `internal/tool` | Typed registry, validation, policy, and execution |
+| `internal/mcp` | MCP transports, bounded discovery, and namespaced tool adapters |
 | `internal/policy` | Ordered authorization rules and tool resource extraction |
 | `internal/workspace` | Per-thread files, uploads, outputs, search, and traversal safety |
 | `internal/artifact` | Explicit user-facing output registration and streaming |
@@ -56,3 +57,5 @@ Planned package groups:
 5. Host side effects require policy approval before execution begins.
 6. Public protocol changes are additive or carry an explicit migration.
 7. Goroutines have an owner and a defined shutdown path.
+8. Extension discovery is bounded and publishes an atomic validated snapshot.
+9. Skill packages never follow symlinks and project into an agent-visible read-only tree.

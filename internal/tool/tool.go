@@ -29,6 +29,19 @@ var (
 	toolNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
 )
 
+// ResultError is a model-correctable tool failure with structured JSON output.
+type ResultError struct {
+	Output json.RawMessage
+}
+
+// NewResultError copies output and constructs a model-correctable failure.
+func NewResultError(output json.RawMessage) error {
+	return &ResultError{Output: append(json.RawMessage(nil), output...)}
+}
+
+// Error implements error without embedding potentially sensitive output text.
+func (*ResultError) Error() string { return "tool returned an error result" }
+
 // Definition describes one executable tool and its JSON Schema input contract.
 type Definition struct {
 	Name        string          `json:"name"`
@@ -81,23 +94,39 @@ func NewRegistry() *Registry {
 
 // Register validates and atomically adds a tool.
 func (registry *Registry) Register(tool Tool) error {
-	if tool == nil {
-		return fmt.Errorf("%w: tool is nil", ErrInvalidDefinition)
-	}
-	definition := tool.Definition()
-	schema, err := compileDefinition(definition)
-	if err != nil {
-		return err
+	return registry.RegisterAll(tool)
+}
+
+// RegisterAll validates and atomically adds a batch of tools.
+func (registry *Registry) RegisterAll(tools ...Tool) error {
+	prepared := make([]registeredTool, 0, len(tools))
+	names := make(map[string]struct{}, len(tools))
+	for _, candidate := range tools {
+		if candidate == nil {
+			return fmt.Errorf("%w: tool is nil", ErrInvalidDefinition)
+		}
+		definition := candidate.Definition()
+		schema, err := compileDefinition(definition)
+		if err != nil {
+			return err
+		}
+		if _, duplicate := names[definition.Name]; duplicate {
+			return fmt.Errorf("register tool %s: %w", definition.Name, ErrDuplicate)
+		}
+		names[definition.Name] = struct{}{}
+		prepared = append(prepared, registeredTool{
+			tool: candidate, definition: cloneDefinition(definition), schema: schema,
+		})
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	if _, exists := registry.tools[definition.Name]; exists {
-		return fmt.Errorf("register tool %s: %w", definition.Name, ErrDuplicate)
+	for _, registered := range prepared {
+		if _, exists := registry.tools[registered.definition.Name]; exists {
+			return fmt.Errorf("register tool %s: %w", registered.definition.Name, ErrDuplicate)
+		}
 	}
-	registry.tools[definition.Name] = registeredTool{
-		tool:       tool,
-		definition: cloneDefinition(definition),
-		schema:     schema,
+	for _, registered := range prepared {
+		registry.tools[registered.definition.Name] = registered
 	}
 	return nil
 }
@@ -147,6 +176,15 @@ func (registry *Registry) Execute(ctx context.Context, call domain.ToolCall) (do
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return domain.ToolResult{}, ctxErr
+		}
+		var resultError *ResultError
+		if errors.As(err, &resultError) {
+			if len(resultError.Output) == 0 || !json.Valid(resultError.Output) {
+				return domain.ToolResult{}, fmt.Errorf("execute tool %s: %w", call.Name, ErrInvalidOutput)
+			}
+			return domain.ToolResult{
+				CallID: call.ID, Output: append(json.RawMessage(nil), resultError.Output...), IsError: true,
+			}, nil
 		}
 		return errorResult(call.ID, err.Error()), nil
 	}
