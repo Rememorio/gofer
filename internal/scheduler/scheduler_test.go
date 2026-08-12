@@ -70,6 +70,33 @@ func TestEngineDispatchesOnceAndCron(t *testing.T) {
 	}
 }
 
+func TestEngineRunTaskDispatchesOnlyRequestedOccurrence(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	store := NewMemoryStore()
+	requested := taskAt("requested", Once, now.Format(time.RFC3339), now)
+	other := taskAt("other", Once, now.Format(time.RFC3339), now)
+	for _, task := range []Task{requested, other} {
+		if err := store.Create(context.Background(), task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	engine, err := New(Config{Store: store, Executor: executorFunc(func(_ context.Context, task Task) (DispatchResult, error) {
+		return DispatchResult{RunID: "run-" + task.ID}, nil
+	}), Owner: "worker", LeaseDuration: time.Minute, BatchSize: 10, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = engine.RunTask(context.Background(), requested); err != nil {
+		t.Fatal(err)
+	}
+	completed, _ := store.Get(context.Background(), requested.ID)
+	untouched, _ := store.Get(context.Background(), other.ID)
+	if completed.Status != Completed || untouched.Status != Enabled || untouched.RunCount != 0 {
+		t.Fatalf("requested=%#v other=%#v", completed, untouched)
+	}
+}
+
 func TestEngineFailureConflictAndLease(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UTC()
@@ -125,6 +152,90 @@ func TestMemoryStoreScopeStatusAndErrors(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreUpdateTriggerAndDelete(t *testing.T) {
+	t.Parallel()
+	store := NewMemoryStore()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	task := taskAt("x", Cron, "* * * * *", now)
+	if err := store.Create(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	title, prompt, schedule := " updated ", " next prompt ", "*/5 * * * *"
+	updated, err := store.Update(context.Background(), task.ID, "u", Update{Title: &title, Prompt: &prompt, Schedule: &schedule}, now)
+	if err != nil || updated.Title != "updated" || updated.Prompt != "next prompt" || !updated.NextRunAt.Equal(now.Add(5*time.Minute)) {
+		t.Fatalf("Update() = %#v, %v", updated, err)
+	}
+	triggered, err := store.Trigger(context.Background(), task.ID, "u", now.Add(time.Second))
+	if err != nil || !triggered.NextRunAt.Equal(now.Add(time.Second)) {
+		t.Fatalf("Trigger() = %#v, %v", triggered, err)
+	}
+	if _, err = store.Update(context.Background(), task.ID, "other", Update{}, now); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Update(scope) = %v", err)
+	}
+	if _, err = store.Trigger(context.Background(), task.ID, "other", now); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Trigger(scope) = %v", err)
+	}
+	if err = store.Delete(context.Background(), task.ID, "other"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Delete(scope) = %v", err)
+	}
+	if err = store.Delete(context.Background(), task.ID, "u"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Get(context.Background(), task.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get(deleted) = %v", err)
+	}
+}
+
+func TestMemoryStoreUpdatePreservesPause(t *testing.T) {
+	t.Parallel()
+	store := NewMemoryStore()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	task := taskAt("x", Cron, "* * * * *", now)
+	if err := store.Create(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	paused, err := store.SetStatus(context.Background(), task.ID, "u", Paused, now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	newTitle := "still paused"
+	updated, err := store.Update(context.Background(), task.ID, "u", Update{Title: &newTitle}, now.Add(2*time.Second))
+	if err != nil || updated.Status != Paused || !updated.NextRunAt.Equal(paused.NextRunAt) {
+		t.Fatalf("Update(paused title) = %#v, %v", updated, err)
+	}
+	newSchedule := "*/10 * * * *"
+	updated, err = store.Update(context.Background(), task.ID, "u", Update{Schedule: &newSchedule}, now.Add(2*time.Second))
+	if err != nil || updated.Status != Paused || !updated.NextRunAt.Equal(now.Add(10*time.Minute)) {
+		t.Fatalf("Update(paused schedule) = %#v, %v", updated, err)
+	}
+	if _, err = store.Update(context.Background(), task.ID, "u", Update{}, now); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Update(empty) = %v", err)
+	}
+}
+
+func TestMemoryStoreStableDueOrderAndDispatchThread(t *testing.T) {
+	t.Parallel()
+	store := NewMemoryStore()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, id := range []string{"b", "a"} {
+		if err := store.Create(context.Background(), taskAt(id, Cron, "* * * * *", now)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	due, err := store.Due(context.Background(), now, 2)
+	if err != nil || len(due) != 2 || due[0].ID != "a" || due[1].ID != "b" {
+		t.Fatalf("Due() = %#v, %v", due, err)
+	}
+	claimed, err := store.Claim(context.Background(), "a", now, "worker", now, now.Add(time.Minute))
+	if err != nil || !claimed.UpdatedAt.Equal(now) {
+		t.Fatalf("Claim() = %#v, %v", claimed, err)
+	}
+	finished, err := store.Finish(context.Background(), "a", "worker", now, now.Add(time.Minute), DispatchResult{RunID: "run", ThreadID: "thread"}, nil)
+	if err != nil || finished.ThreadID != "thread" {
+		t.Fatalf("Finish() = %#v, %v", finished, err)
+	}
+}
+
 func TestValidationConfigAndCancellation(t *testing.T) {
 	t.Parallel()
 	valid := taskAt("x", Cron, "* * * * *", time.Now().UTC())
@@ -164,6 +275,45 @@ func TestEngineRunStopsOnCancellation(t *testing.T) {
 	}
 	if err := (*Engine)(nil).Run(context.Background()); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("nil Run=%v", err)
+	}
+	if err := (*Engine)(nil).RunOnce(context.Background()); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("nil RunOnce=%v", err)
+	}
+	if err := (*Engine)(nil).RunTask(context.Background(), Task{}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("nil RunTask=%v", err)
+	}
+}
+
+func TestEngineRunReportsFailureAndKeepsPolling(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	store := NewMemoryStore()
+	if err := store.Create(context.Background(), taskAt("failed", Once, now.Format(time.RFC3339), now)); err != nil {
+		t.Fatal(err)
+	}
+	reported := make(chan error, 1)
+	engine, err := New(Config{
+		Store: store, Executor: executorFunc(func(context.Context, Task) (DispatchResult, error) { return DispatchResult{}, errors.New("dispatch") }),
+		Owner: "worker", LeaseDuration: time.Second, BatchSize: 1, PollInterval: 100 * time.Millisecond,
+		Now: func() time.Time { return now }, OnError: func(err error) { reported <- err },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { result <- engine.Run(ctx) }()
+	select {
+	case err = <-reported:
+		if err == nil || err.Error() != "dispatch" {
+			t.Fatalf("reported = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("dispatch failure was not reported")
+	}
+	cancel()
+	if err = <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() = %v", err)
 	}
 }
 

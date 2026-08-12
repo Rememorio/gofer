@@ -95,6 +95,27 @@ func TestMiddlewareGatewayPolicyAndContext(t *testing.T) {
 	}
 }
 
+func TestGatewayPolicyScheduledTasks(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		method, path string
+		permission   Permission
+	}{
+		{http.MethodGet, "/api/scheduled-tasks", ScheduledRead},
+		{http.MethodGet, "/api/scheduled-tasks/task", ScheduledRead},
+		{http.MethodPost, "/api/scheduled-tasks", ScheduledWrite},
+		{http.MethodPatch, "/api/scheduled-tasks/task", ScheduledWrite},
+		{http.MethodPost, "/api/scheduled-tasks/task/trigger", ScheduledWrite},
+		{http.MethodGet, "/api/scheduled-tasks-extra", Admin},
+	} {
+		request := httptest.NewRequestWithContext(context.Background(), test.method, test.path, nil)
+		permission, public := GatewayPolicy(request)
+		if public || permission != test.permission {
+			t.Fatalf("GatewayPolicy(%s %s) = %q, %v", test.method, test.path, permission, public)
+		}
+	}
+}
+
 func TestMiddlewareAndContextValidation(t *testing.T) {
 	t.Parallel()
 	if _, err := (Middleware{}).Handler(); !errors.Is(err, ErrInvalidConfig) {

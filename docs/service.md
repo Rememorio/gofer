@@ -36,6 +36,9 @@ Optional agent extensions are initialized before the listener becomes ready:
   isolated run journal and tool registry while sharing only the parent's
   policy-controlled workspace, configured extensions, and tenant scope. The
   parent can inspect, wait for, list, or cancel child work explicitly.
+- `scheduler.enabled` polls durable one-shot and cron definitions using
+  expiring, compare-and-claim leases. SQLite and PostgreSQL retain schedules,
+  dispatch history, and their dedicated thread binding across restarts.
 
 Create a thread and launch a run:
 
@@ -69,3 +72,23 @@ SSE sequence numbers are emitted as event IDs; clients may reconnect with
 `Last-Event-ID`. Health is public at `/healthz`. Prometheus text exposition is
 available at `/metrics`. When bearer authentication is enabled, all API routes
 other than health require the permissions configured for that token.
+
+Create and manage scheduled work through the same service:
+
+```sh
+curl -sS -X POST http://127.0.0.1:8001/api/scheduled-tasks \
+  -H 'content-type: application/json' \
+  -d '{
+    "title":"Morning research",
+    "prompt":"Summarize the latest project activity.",
+    "schedule_type":"cron",
+    "schedule":"0 9 * * 1-5",
+    "timezone":"Asia/Shanghai"
+  }'
+```
+
+The collection supports `GET` and `POST`. Individual resources support `GET`,
+`PATCH`, and `DELETE`, plus `POST` actions at `/pause`, `/resume`, and
+`/trigger`. A task without `thread_id` gets a dedicated thread on first
+dispatch and reuses it thereafter. With authentication enabled, reads require
+`scheduled:read` and mutations require `scheduled:write`.

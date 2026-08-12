@@ -85,10 +85,30 @@ type Store interface {
 	Create(context.Context, Task) error
 	Get(context.Context, string) (Task, error)
 	List(context.Context, string) ([]Task, error)
+	Update(context.Context, string, string, Update, time.Time) (Task, error)
+	Delete(context.Context, string, string) error
+	Trigger(context.Context, string, string, time.Time) (Task, error)
 	Due(context.Context, time.Time, int) ([]Task, error)
 	Claim(context.Context, string, time.Time, string, time.Time, time.Time) (Task, error)
 	Finish(context.Context, string, string, time.Time, time.Time, DispatchResult, error) (Task, error)
 	SetStatus(context.Context, string, string, Status, time.Time) (Task, error)
+}
+
+// Update is a partial mutable scheduled-task definition.
+type Update struct {
+	Title        *string       `json:"title,omitempty"`
+	Prompt       *string       `json:"prompt,omitempty"`
+	ScheduleType *ScheduleType `json:"schedule_type,omitempty"`
+	Schedule     *string       `json:"schedule,omitempty"`
+	Timezone     *string       `json:"timezone,omitempty"`
+}
+
+func (update Update) empty() bool {
+	return update.Title == nil && update.Prompt == nil && update.ScheduleType == nil && update.Schedule == nil && update.Timezone == nil
+}
+
+func (update Update) changesSchedule() bool {
+	return update.ScheduleType != nil || update.Schedule != nil || update.Timezone != nil
 }
 
 // MemoryStore is the concurrency-safe reference Store.
@@ -150,6 +170,97 @@ func (store *MemoryStore) List(ctx context.Context, userID string) ([]Task, erro
 	return tasks, nil
 }
 
+// Update changes mutable task fields and recomputes the next occurrence.
+func (store *MemoryStore) Update(ctx context.Context, id, userID string, update Update, at time.Time) (Task, error) {
+	if err := ctx.Err(); err != nil {
+		return Task{}, err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	task, exists := store.tasks[id]
+	if !exists || task.UserID != userID {
+		return Task{}, ErrNotFound
+	}
+	if task.Status == Running {
+		return Task{}, ErrConflict
+	}
+	if update.empty() {
+		return Task{}, ErrInvalid
+	}
+	applyUpdate(&task, update)
+	if update.changesSchedule() {
+		next, err := NextRun(task.ScheduleType, task.Schedule, task.Timezone, at)
+		if err != nil {
+			return Task{}, err
+		}
+		task.NextRunAt = next
+		if task.Status != Paused {
+			task.Status = Enabled
+		}
+	}
+	task.UpdatedAt = at
+	if err := task.Validate(); err != nil {
+		return Task{}, err
+	}
+	store.tasks[id] = task
+	return task, nil
+}
+
+// Delete removes one owned task unless it is currently leased.
+func (store *MemoryStore) Delete(ctx context.Context, id, userID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	task, exists := store.tasks[id]
+	if !exists || task.UserID != userID {
+		return ErrNotFound
+	}
+	if task.Status == Running {
+		return ErrConflict
+	}
+	delete(store.tasks, id)
+	return nil
+}
+
+// Trigger makes one owned non-running task immediately due.
+func (store *MemoryStore) Trigger(ctx context.Context, id, userID string, at time.Time) (Task, error) {
+	if err := ctx.Err(); err != nil {
+		return Task{}, err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	task, exists := store.tasks[id]
+	if !exists || task.UserID != userID {
+		return Task{}, ErrNotFound
+	}
+	if task.Status == Running {
+		return Task{}, ErrConflict
+	}
+	task.Status, task.NextRunAt, task.UpdatedAt = Enabled, at, at
+	store.tasks[id] = task
+	return task, nil
+}
+
+func applyUpdate(task *Task, update Update) {
+	if update.Title != nil {
+		task.Title = strings.TrimSpace(*update.Title)
+	}
+	if update.Prompt != nil {
+		task.Prompt = strings.TrimSpace(*update.Prompt)
+	}
+	if update.ScheduleType != nil {
+		task.ScheduleType = *update.ScheduleType
+	}
+	if update.Schedule != nil {
+		task.Schedule = strings.TrimSpace(*update.Schedule)
+	}
+	if update.Timezone != nil {
+		task.Timezone = strings.TrimSpace(*update.Timezone)
+	}
+}
+
 // Due returns enabled tasks whose schedule arrived and lease is free.
 func (store *MemoryStore) Due(ctx context.Context, now time.Time, limit int) ([]Task, error) {
 	if err := ctx.Err(); err != nil {
@@ -167,7 +278,9 @@ func (store *MemoryStore) Due(ctx context.Context, now time.Time, limit int) ([]
 		}
 	}
 	store.mu.RUnlock()
-	sort.Slice(tasks, func(i, j int) bool { return tasks[i].NextRunAt.Before(tasks[j].NextRunAt) })
+	sort.Slice(tasks, func(i, j int) bool {
+		return tasks[i].NextRunAt.Before(tasks[j].NextRunAt) || tasks[i].NextRunAt.Equal(tasks[j].NextRunAt) && tasks[i].ID < tasks[j].ID
+	})
 	if len(tasks) > limit {
 		tasks = tasks[:limit]
 	}
@@ -192,7 +305,7 @@ func (store *MemoryStore) Claim(ctx context.Context, id string, expectedNext tim
 	task.Status = Running
 	task.LeaseOwner = owner
 	task.LeaseExpiresAt = leaseUntil
-	task.UpdatedAt = time.Now().UTC()
+	task.UpdatedAt = now
 	store.tasks[id] = task
 	return task, nil
 }
@@ -214,6 +327,9 @@ func (store *MemoryStore) Finish(ctx context.Context, id, owner string, at, next
 	task.LastRunAt = at
 	task.RunCount++
 	task.LastRunID = result.RunID
+	if task.ThreadID == "" && result.ThreadID != "" {
+		task.ThreadID = result.ThreadID
+	}
 	task.LeaseOwner = ""
 	task.LeaseExpiresAt = time.Time{}
 	task.UpdatedAt = at
@@ -253,6 +369,13 @@ func (store *MemoryStore) SetStatus(ctx context.Context, id, userID string, stat
 	}
 	if task.Status == Running {
 		return Task{}, ErrConflict
+	}
+	if status == Enabled && task.NextRunAt.IsZero() {
+		next, err := NextRun(task.ScheduleType, task.Schedule, task.Timezone, at)
+		if err != nil {
+			return Task{}, err
+		}
+		task.NextRunAt = next
 	}
 	task.Status = status
 	task.UpdatedAt = at
@@ -342,6 +465,7 @@ type Engine struct {
 	batch         int
 	now           func() time.Time
 	pollInterval  time.Duration
+	onError       func(error)
 }
 
 // Config controls scheduler ownership and bounded dispatch.
@@ -353,6 +477,7 @@ type Config struct {
 	BatchSize     int
 	Now           func() time.Time
 	PollInterval  time.Duration
+	OnError       func(error)
 }
 
 // New validates config and constructs an engine.
@@ -366,17 +491,18 @@ func New(config Config) (*Engine, error) {
 	if config.Now == nil {
 		config.Now = time.Now
 	}
-	return &Engine{store: config.Store, executor: config.Executor, owner: config.Owner, leaseDuration: config.LeaseDuration, batch: config.BatchSize, now: config.Now, pollInterval: config.PollInterval}, nil
+	return &Engine{store: config.Store, executor: config.Executor, owner: config.Owner, leaseDuration: config.LeaseDuration, batch: config.BatchSize, now: config.Now, pollInterval: config.PollInterval, onError: config.OnError}, nil
 }
 
-// Run dispatches immediately and after every poll interval until cancellation or failure.
+// Run dispatches immediately and after every poll interval until cancellation.
+// Individual poll and dispatch failures are reported through Config.OnError.
 func (engine *Engine) Run(ctx context.Context) error {
 	if engine == nil {
 		return ErrInvalid
 	}
 	for {
-		if err := engine.RunOnce(ctx); err != nil {
-			return err
+		if err := engine.RunOnce(ctx); err != nil && ctx.Err() == nil && engine.onError != nil {
+			engine.onError(err)
 		}
 		timer := time.NewTimer(engine.pollInterval)
 		select {
@@ -392,6 +518,9 @@ func (engine *Engine) Run(ctx context.Context) error {
 
 // RunOnce claims and synchronously dispatches one bounded due batch.
 func (engine *Engine) RunOnce(ctx context.Context) error {
+	if engine == nil {
+		return ErrInvalid
+	}
 	now := engine.now().UTC()
 	tasks, err := engine.store.Due(ctx, now, engine.batch)
 	if err != nil {
@@ -399,21 +528,33 @@ func (engine *Engine) RunOnce(ctx context.Context) error {
 	}
 	var failures []error
 	for _, task := range tasks {
-		claimed, claimErr := engine.store.Claim(ctx, task.ID, task.NextRunAt, engine.owner, now, now.Add(engine.leaseDuration))
-		if errors.Is(claimErr, ErrConflict) {
+		dispatchErr := engine.dispatch(ctx, task, now)
+		if errors.Is(dispatchErr, ErrConflict) {
 			continue
 		}
-		if claimErr != nil {
-			failures = append(failures, claimErr)
-			continue
-		}
-		result, dispatchErr := engine.executor.Execute(ctx, claimed)
-		next := time.Time{}
-		if claimed.ScheduleType == Cron {
-			next, _ = NextRun(Cron, claimed.Schedule, claimed.Timezone, now)
-		}
-		_, finishErr := engine.store.Finish(context.WithoutCancel(ctx), claimed.ID, engine.owner, engine.now().UTC(), next, result, dispatchErr)
-		failures = append(failures, dispatchErr, finishErr)
+		failures = append(failures, dispatchErr)
 	}
 	return errors.Join(failures...)
+}
+
+// RunTask claims and dispatches exactly one task occurrence.
+func (engine *Engine) RunTask(ctx context.Context, task Task) error {
+	if engine == nil {
+		return ErrInvalid
+	}
+	return engine.dispatch(ctx, task, engine.now().UTC())
+}
+
+func (engine *Engine) dispatch(ctx context.Context, task Task, now time.Time) error {
+	claimed, err := engine.store.Claim(ctx, task.ID, task.NextRunAt, engine.owner, now, now.Add(engine.leaseDuration))
+	if err != nil {
+		return err
+	}
+	result, dispatchErr := engine.executor.Execute(ctx, claimed)
+	next := time.Time{}
+	if claimed.ScheduleType == Cron {
+		next, _ = NextRun(Cron, claimed.Schedule, claimed.Timezone, now)
+	}
+	_, finishErr := engine.store.Finish(context.WithoutCancel(ctx), claimed.ID, engine.owner, engine.now().UTC(), next, result, dispatchErr)
+	return errors.Join(dispatchErr, finishErr)
 }

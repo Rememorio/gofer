@@ -18,14 +18,22 @@ is rejected during startup validation.
 
 Scheduled tasks support one RFC3339 timestamp or a standard five-field cron
 expression in an IANA timezone. A store contract owns task state and atomic
-leases. The reference store is concurrency-safe; durable adapters can implement
-the same compare-and-claim operations.
+leases. The in-memory reference store is concurrency-safe, while SQLite and
+PostgreSQL persist the same task definitions, dispatch history, and
+compare-and-claim leases across restarts.
 
 Workers query bounded due batches and claim with an owner and expiry. Active
 leases prevent overlap, while expired `running` tasks are eligible for recovery.
 One-shot tasks end as completed or failed. Cron tasks record the outcome and
 advance to the first occurrence after dispatch time, avoiding unbounded catch-up
 bursts after downtime.
+
+The authenticated HTTP API scopes every task to its bearer principal and
+supports create, list, read, partial update, delete, pause, resume, and manual
+trigger operations under `/api/scheduled-tasks`. Read operations require
+`scheduled:read`; mutations require `scheduled:write`. A manual trigger uses
+the same lease path as background polling. The first dispatch can create a
+dedicated thread, which is then retained for later cron occurrences.
 
 ## Channels
 

@@ -31,6 +31,7 @@ import (
 	"github.com/Rememorio/gofer/internal/policy"
 	"github.com/Rememorio/gofer/internal/runtime"
 	"github.com/Rememorio/gofer/internal/sandbox"
+	"github.com/Rememorio/gofer/internal/scheduler"
 	"github.com/Rememorio/gofer/internal/skill"
 	"github.com/Rememorio/gofer/internal/store"
 	"github.com/Rememorio/gofer/internal/store/sqlstore"
@@ -55,16 +56,19 @@ type Service struct {
 	skills     *skill.Catalog
 	skillMount string
 	memories   memory.Store
+	scheduled  scheduler.Store
+	scheduler  *scheduler.Engine
 	providers  map[string]configuredProvider
 	metrics    *observe.Registry
 	handler    http.Handler
 	logger     *slog.Logger
 
-	mu     sync.Mutex
-	active map[domain.RunID]context.CancelFunc
-	wait   sync.WaitGroup
-	once   sync.Once
-	err    error
+	mu         sync.Mutex
+	active     map[domain.RunID]context.CancelFunc
+	wait       sync.WaitGroup
+	background sync.WaitGroup
+	once       sync.Once
+	err        error
 }
 
 type configuredProvider struct {
@@ -119,11 +123,18 @@ func (service *Service) open() error {
 	if err = service.openAgentExtensions(); err != nil {
 		return err
 	}
+	if err = service.openScheduler(); err != nil {
+		return err
+	}
 	service.metrics, err = newMetrics()
 	if err != nil {
 		return err
 	}
-	return service.openHandler()
+	if err = service.openHandler(); err != nil {
+		return err
+	}
+	service.startScheduler()
+	return nil
 }
 
 func (service *Service) openAgentExtensions() error {
@@ -254,7 +265,10 @@ func (service *Service) openHandler() error {
 	if err != nil {
 		return err
 	}
-	var api http.Handler = gatewayHandler
+	apiMux := http.NewServeMux()
+	apiMux.Handle("/", gatewayHandler)
+	service.schedulerRoutes(apiMux)
+	var api http.Handler = apiMux
 	if service.config.Auth.Enabled {
 		authenticator, authErr := buildAuthenticator(service.config.Auth)
 		if authErr != nil {
@@ -577,26 +591,26 @@ func (service *Service) settlePending(launch gateway.StartRequest, cause error) 
 
 // Cancel requests cancellation of an active run, including a not-yet-started run.
 func (service *Service) Cancel(ctx context.Context, id domain.RunID) error {
+	run, err := service.store.Run(ctx, id)
+	if err != nil {
+		return err
+	}
+	if run.Terminal() {
+		return store.ErrConflict
+	}
 	service.mu.Lock()
 	cancel := service.active[id]
 	service.mu.Unlock()
-	if cancel == nil {
-		run, err := service.store.Run(ctx, id)
-		if err != nil {
-			return err
-		}
-		if run.Terminal() {
-			return store.ErrConflict
-		}
-		if run.Status == domain.RunPending {
-			launch := gateway.StartRequest{RunID: run.ID, ThreadID: run.ThreadID}
-			service.settlePending(launch, context.Canceled)
-			return nil
-		}
-		return store.ErrConflict
+	if cancel != nil {
+		cancel()
+		return nil
 	}
-	cancel()
-	return nil
+	if run.Status == domain.RunPending {
+		launch := gateway.StartRequest{RunID: run.ID, ThreadID: run.ThreadID}
+		service.settlePending(launch, context.Canceled)
+		return nil
+	}
+	return store.ErrConflict
 }
 
 func (service *Service) finishActive(id domain.RunID) {
@@ -616,6 +630,7 @@ func (service *Service) Close() error {
 	}
 	service.once.Do(func() {
 		service.cancel()
+		service.background.Wait()
 		service.wait.Wait()
 		if service.browser != nil {
 			service.err = errors.Join(service.err, service.browser.Close())

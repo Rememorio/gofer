@@ -37,6 +37,10 @@ const (
 	RunsCancel Permission = "runs:cancel"
 	// Admin permits all operations.
 	Admin Permission = "admin"
+	// ScheduledRead permits reading scheduled tasks.
+	ScheduledRead Permission = "scheduled:read"
+	// ScheduledWrite permits creating and changing scheduled tasks.
+	ScheduledWrite Permission = "scheduled:write"
 )
 
 // Principal is an authenticated identity with bounded permissions.
@@ -157,6 +161,12 @@ func GatewayPolicy(request *http.Request) (Permission, bool) {
 	path := request.URL.Path
 	if path == "/healthz" {
 		return "", true
+	}
+	if path == "/api/scheduled-tasks" || strings.HasPrefix(path, "/api/scheduled-tasks/") {
+		if request.Method == http.MethodGet {
+			return ScheduledRead, false
+		}
+		return ScheduledWrite, false
 	}
 	if strings.Contains(path, "/runs/") && strings.HasSuffix(path, "/cancel") {
 		return RunsCancel, false
