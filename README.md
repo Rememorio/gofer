@@ -118,8 +118,9 @@ are wired into every run when enabled. Long-term memory uses the configured
 SQLite/PostgreSQL store, supports atomic import/export and owner-scoped fact
 management, and survives service restarts. Service control primitives include
 digest-only bearer credentials and RBAC, persistent leased cron/one-shot
-scheduling with an authenticated management API, channel normalization,
-dependency-ordered extensions, and bounded-cardinality Prometheus metrics.
+scheduling with an authenticated management API, durable channel bindings and
+thread mappings, signed webhook ingress/callbacks, dependency-ordered
+extensions, and bounded-cardinality Prometheus metrics.
 
 ## Design
 
@@ -143,6 +144,8 @@ The long-running task primitives are documented in
 [Task control](docs/task-control.md).
 HTTP contracts and persistence behavior are documented in
 [Gateway and persistence](docs/gateway.md).
+Messaging identity, webhook, and callback contracts are documented in
+[Channels](docs/channels.md).
 Operational boundaries are documented in [Service control plane](docs/control-plane.md).
 Tool result externalization and fallback behavior are documented in
 [Tool output budgets](docs/tool-output.md).

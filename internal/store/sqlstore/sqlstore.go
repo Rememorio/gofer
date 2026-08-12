@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Rememorio/gofer/internal/channel"
 	"github.com/Rememorio/gofer/internal/control"
 	"github.com/Rememorio/gofer/internal/domain"
 	"github.com/Rememorio/gofer/internal/event"
@@ -118,6 +119,12 @@ var schema = []string{
 	`CREATE INDEX IF NOT EXISTS gofer_memory_scope_idx ON gofer_memory_entries(user_id,thread_id,agent_id,updated_at)`,
 	`CREATE TABLE IF NOT EXISTS gofer_feedback (id TEXT PRIMARY KEY,run_id TEXT NOT NULL REFERENCES gofer_runs(id) ON DELETE CASCADE,thread_id TEXT NOT NULL REFERENCES gofer_threads(id) ON DELETE CASCADE,user_id TEXT NOT NULL,message_id TEXT NOT NULL,rating BIGINT NOT NULL,comment TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(thread_id,run_id,user_id))`,
 	`CREATE INDEX IF NOT EXISTS gofer_feedback_run_idx ON gofer_feedback(thread_id,run_id,created_at)`,
+	`CREATE TABLE IF NOT EXISTS gofer_channel_bindings (id TEXT PRIMARY KEY,user_id TEXT NOT NULL,provider TEXT NOT NULL,workspace_id TEXT NOT NULL,workspace_name TEXT NOT NULL,external_user_id TEXT NOT NULL,external_user_name TEXT NOT NULL,status TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(provider,workspace_id,external_user_id))`,
+	`CREATE INDEX IF NOT EXISTS gofer_channel_bindings_user_idx ON gofer_channel_bindings(user_id,updated_at)`,
+	`CREATE TABLE IF NOT EXISTS gofer_channel_conversations (binding_id TEXT NOT NULL REFERENCES gofer_channel_bindings(id) ON DELETE CASCADE,provider TEXT NOT NULL,chat_id TEXT NOT NULL,topic_id TEXT NOT NULL,thread_id TEXT NOT NULL REFERENCES gofer_threads(id) ON DELETE CASCADE,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(binding_id,chat_id,topic_id))`,
+	`CREATE INDEX IF NOT EXISTS gofer_channel_conversations_thread_idx ON gofer_channel_conversations(thread_id)`,
+	`CREATE TABLE IF NOT EXISTS gofer_channel_deliveries (delivery_key TEXT PRIMARY KEY,expires_at BIGINT NOT NULL,complete BOOLEAN NOT NULL)`,
+	`CREATE INDEX IF NOT EXISTS gofer_channel_deliveries_expiry_idx ON gofer_channel_deliveries(expires_at)`,
 }
 
 // ControlState exposes a durable goal and todo store backed by this database.
@@ -128,6 +135,9 @@ func (database *SQL) MemoryState() memory.Store { return &memoryState{database: 
 
 // FeedbackState exposes durable run feedback backed by this database.
 func (database *SQL) FeedbackState() feedback.Store { return &feedbackState{database: database} }
+
+// ChannelState exposes durable identity, conversation, and delivery state.
+func (database *SQL) ChannelState() channel.State { return &channelState{database: database} }
 
 // CreateThread persists a validated thread transactionally.
 func (database *SQL) CreateThread(ctx context.Context, thread domain.Thread) error {

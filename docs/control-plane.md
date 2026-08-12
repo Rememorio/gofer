@@ -4,9 +4,9 @@
 
 Gofer's bearer authenticator hashes configured opaque tokens with SHA-256 and
 retains only their digests. Credentials must contain at least 24 characters.
-An authenticated principal receives explicit `threads:*` and `runs:*`
-permissions, or the administrative capability. Permission and token slices are
-copied at every boundary.
+An authenticated principal receives explicit `threads:*`, `runs:*`,
+`channels:*`, and service-specific permissions, or the administrative
+capability. Permission and token slices are copied at every boundary.
 
 The HTTP middleware is fail-closed: health is the only public gateway route;
 unknown paths require administrative access. Authentication and authorization
@@ -38,15 +38,20 @@ dedicated thread, which is then retained for later cron occurrences.
 ## Channels
 
 Provider adapters normalize inbound text and attachment metadata before calling
-the channel manager. The manager resolves the external provider identity to an
-internal user before dispatch, derives a provider/workspace/user/topic thread
-key, applies a global in-flight bound, and atomically deduplicates provider event
-IDs. Failed authentication, dispatch, or send attempts release their claim so a
-provider retry can recover; successful IDs remain until the configured TTL.
+the channel manager. The manager resolves an active external binding, reuses a
+durable binding/chat/topic thread mapping, enforces a bounded ingress queue and
+global in-flight limit, serializes turns within one conversation, and atomically
+deduplicates provider event IDs. Failed authentication, dispatch, or send
+attempts release their claim so a provider retry can recover; successful IDs
+remain until the configured TTL. SQL deployments preserve all three state
+classes across restarts.
 
-Provider-specific SDKs implement the small `Sender` contract. This keeps Slack,
-Telegram, Feishu, and other transports outside the agent runtime and gives them
-one identity and idempotency policy.
+The built-in generic adapter verifies timestamped HMAC-SHA256 webhooks and signs
+outbound callbacks. Provider-specific SDKs implement the same small `Sender`
+contract. This keeps Slack, Telegram, Feishu, and other transports outside the
+agent runtime while giving them one ownership, concurrency, and idempotency
+policy. The complete wire contract and connection API are documented in
+[Channels](channels.md).
 
 ## Extensions and metrics
 

@@ -18,6 +18,7 @@ import (
 	"github.com/Rememorio/gofer/internal/artifact"
 	"github.com/Rememorio/gofer/internal/auth"
 	"github.com/Rememorio/gofer/internal/browser"
+	"github.com/Rememorio/gofer/internal/channel"
 	"github.com/Rememorio/gofer/internal/config"
 	"github.com/Rememorio/gofer/internal/contextwindow"
 	"github.com/Rememorio/gofer/internal/control"
@@ -59,30 +60,33 @@ import (
 
 // Service owns shared adapters and active asynchronous runs.
 type Service struct {
-	ctx          context.Context
-	cancel       context.CancelFunc
-	config       config.Config
-	store        store.Store
-	closeStore   io.Closer
-	workspaces   *workspace.Manager
-	uploads      *uploads.Manager
-	artifacts    *artifact.Catalog
-	controls     *control.Service
-	feedback     feedback.Store
-	browser      *browser.Manager
-	research     *webresearch.Client
-	mcp          *mcp.Client
-	skills       *skill.Catalog
-	skillMount   string
-	memories     memory.Store
-	scheduled    scheduler.Store
-	scheduler    *scheduler.Engine
-	providers    map[string]configuredProvider
-	metrics      *observe.Registry
-	handler      http.Handler
-	logger       *slog.Logger
-	resources    sync.Mutex
-	conversation sync.Mutex
+	ctx            context.Context
+	cancel         context.CancelFunc
+	config         config.Config
+	store          store.Store
+	closeStore     io.Closer
+	workspaces     *workspace.Manager
+	uploads        *uploads.Manager
+	artifacts      *artifact.Catalog
+	controls       *control.Service
+	feedback       feedback.Store
+	browser        *browser.Manager
+	research       *webresearch.Client
+	mcp            *mcp.Client
+	skills         *skill.Catalog
+	skillMount     string
+	memories       memory.Store
+	scheduled      scheduler.Store
+	scheduler      *scheduler.Engine
+	channels       *channel.Manager
+	channelState   channel.State
+	channelWebhook http.Handler
+	providers      map[string]configuredProvider
+	metrics        *observe.Registry
+	handler        http.Handler
+	logger         *slog.Logger
+	resources      sync.Mutex
+	conversation   sync.Mutex
 
 	mu         sync.Mutex
 	active     map[domain.RunID]context.CancelFunc
@@ -164,6 +168,9 @@ func (service *Service) open() error {
 	}
 	service.metrics, err = newMetrics()
 	if err != nil {
+		return err
+	}
+	if err = service.openChannels(); err != nil {
 		return err
 	}
 	if err = service.openHandler(); err != nil {
@@ -373,6 +380,7 @@ func (service *Service) openHandler() error {
 	service.feedbackRoutes(apiMux)
 	service.usageRoutes(apiMux)
 	service.memoryRoutes(apiMux)
+	service.channelRoutes(apiMux)
 	var api http.Handler = apiMux
 	if service.config.Auth.Enabled {
 		authenticator, authErr := buildAuthenticator(service.config.Auth)
@@ -386,6 +394,9 @@ func (service *Service) openHandler() error {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/", api)
+	if service.channelWebhook != nil {
+		mux.Handle("POST /api/channels/webhook/{workspace_id}/events", service.channelWebhook)
+	}
 	mux.HandleFunc("GET /metrics", service.serveMetrics)
 	service.handler = service.observeRequests(mux)
 	return nil
@@ -432,6 +443,9 @@ func (service *Service) CleanupThread(ctx context.Context, threadID domain.Threa
 	service.artifacts.RemoveThread(threadID)
 	cleanupErr = errors.Join(cleanupErr, service.controls.Delete(ctx, threadID))
 	cleanupErr = errors.Join(cleanupErr, service.feedback.DeleteThread(ctx, threadID))
+	if service.channelState != nil {
+		cleanupErr = errors.Join(cleanupErr, service.channelState.DeleteThread(ctx, threadID))
+	}
 	cleanupErr = errors.Join(cleanupErr, service.workspaces.Remove(threadID))
 	return cleanupErr
 }
@@ -929,6 +943,9 @@ func (service *Service) Close() error {
 	}
 	service.once.Do(func() {
 		service.cancel()
+		if service.channels != nil {
+			service.err = errors.Join(service.err, service.channels.Close())
+		}
 		service.background.Wait()
 		service.wait.Wait()
 		if service.browser != nil {

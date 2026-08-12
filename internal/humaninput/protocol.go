@@ -612,6 +612,14 @@ func formatRequest(request Request) string {
 	return strings.Join(parts, "\n")
 }
 
+// FormatRequest renders a validated request for text-only channel clients.
+func FormatRequest(request Request) string {
+	if request.Validate() != nil {
+		return "Additional information is required."
+	}
+	return formatRequest(request)
+}
+
 func formatRequestHeading(request Request) string {
 	icons := map[ClarificationType]string{
 		MissingInfo: "❓", AmbiguousRequirement: "🤔", ApproachChoice: "🔀",

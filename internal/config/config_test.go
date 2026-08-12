@@ -295,7 +295,22 @@ func TestValidateRejectsInvalidConfigurations(t *testing.T) {
 		}},
 		{name: "scheduler batch", mutate: func(config *Config) { config.Scheduler.BatchSize = 1001 }},
 		{name: "channel inflight", mutate: func(config *Config) { config.Channels.MaxInflight = 0 }},
+		{name: "channel queue", mutate: func(config *Config) { config.Channels.QueueCapacity = 1 }},
 		{name: "channel dedupe", mutate: func(config *Config) { config.Channels.DedupeTTLSeconds = 59 }},
+		{name: "channel webhook without channels", mutate: func(config *Config) {
+			config.Channels.Webhook.Enabled = true
+		}},
+		{name: "channel webhook URL", mutate: func(config *Config) {
+			config.Channels.Enabled = true
+			config.Channels.Webhook = ChannelWebhookConfig{Enabled: true, Secret: "012345678901234567890123", OutboundURL: "file:///tmp/reply", TimeoutSeconds: 10, MaxAttempts: 1, MaxBodyBytes: 1024, ClockSkewSeconds: 60}
+		}},
+		{name: "channel binding provider", mutate: func(config *Config) {
+			config.Channels.Bindings = []ChannelBindingConfig{{UserID: "u", Provider: "Webhook", ExternalUserID: "external"}}
+		}},
+		{name: "duplicate channel binding", mutate: func(config *Config) {
+			binding := ChannelBindingConfig{UserID: "u", Provider: "webhook", ExternalUserID: "external"}
+			config.Channels.Bindings = []ChannelBindingConfig{binding, binding}
+		}},
 		{name: "title words low", mutate: func(config *Config) { config.Title.MaxWords = 0 }},
 		{name: "title words high", mutate: func(config *Config) { config.Title.MaxWords = 21 }},
 		{name: "title chars low", mutate: func(config *Config) { config.Title.MaxChars = 9 }},

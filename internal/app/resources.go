@@ -99,6 +99,7 @@ func (service *Service) listFeatures(writer http.ResponseWriter, _ *http.Request
 		"skills":               map[string]bool{"enabled": service.skills != nil},
 		"memory":               map[string]bool{"enabled": service.memories != nil},
 		"scheduler":            map[string]bool{"enabled": service.config.Scheduler.Enabled},
+		"channels":             map[string]bool{"enabled": service.channels != nil},
 		"read_before_write":    map[string]bool{"enabled": service.config.ReadBeforeWrite.Enabled},
 		"loop_detection":       map[string]bool{"enabled": service.config.LoopDetection.Enabled},
 		"tool_history_repair":  map[string]bool{"enabled": true},

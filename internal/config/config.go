@@ -253,9 +253,35 @@ type SchedulerConfig struct {
 
 // ChannelsConfig controls normalized inbound message dispatch.
 type ChannelsConfig struct {
-	Enabled          bool `yaml:"enabled" json:"enabled"`
-	MaxInflight      int  `yaml:"max_inflight" json:"max_inflight"`
-	DedupeTTLSeconds int  `yaml:"dedupe_ttl_seconds" json:"dedupe_ttl_seconds"`
+	Enabled           bool                   `yaml:"enabled" json:"enabled"`
+	MaxInflight       int                    `yaml:"max_inflight" json:"max_inflight"`
+	QueueCapacity     int                    `yaml:"queue_capacity" json:"queue_capacity"`
+	DedupeTTLSeconds  int                    `yaml:"dedupe_ttl_seconds" json:"dedupe_ttl_seconds"`
+	UnauthorizedReply string                 `yaml:"unauthorized_reply" json:"unauthorized_reply"`
+	Bindings          []ChannelBindingConfig `yaml:"bindings" json:"bindings"`
+	Webhook           ChannelWebhookConfig   `yaml:"webhook" json:"webhook"`
+}
+
+// ChannelBindingConfig bootstraps one operator-approved external identity.
+type ChannelBindingConfig struct {
+	UserID           string `yaml:"user_id" json:"user_id"`
+	Provider         string `yaml:"provider" json:"provider"`
+	WorkspaceID      string `yaml:"workspace_id" json:"workspace_id,omitempty"`
+	WorkspaceName    string `yaml:"workspace_name" json:"workspace_name,omitempty"`
+	ExternalUserID   string `yaml:"external_user_id" json:"external_user_id"`
+	ExternalUserName string `yaml:"external_user_name" json:"external_user_name,omitempty"`
+}
+
+// ChannelWebhookConfig controls the generic signed webhook adapter.
+type ChannelWebhookConfig struct {
+	Enabled               bool   `yaml:"enabled" json:"enabled"`
+	Secret                string `yaml:"secret" json:"-"`
+	OutboundURL           string `yaml:"outbound_url" json:"outbound_url,omitempty"`
+	TimeoutSeconds        int    `yaml:"timeout_seconds" json:"timeout_seconds"`
+	MaxAttempts           int    `yaml:"max_attempts" json:"max_attempts"`
+	MaxBodyBytes          int64  `yaml:"max_body_bytes" json:"max_body_bytes"`
+	ClockSkewSeconds      int    `yaml:"clock_skew_seconds" json:"clock_skew_seconds"`
+	AllowPrivateAddresses bool   `yaml:"allow_private_addresses" json:"allow_private_addresses"`
 }
 
 // TitleConfig controls automatic first-exchange conversation titles.
@@ -366,8 +392,12 @@ func Defaults() Config {
 		Memory:    MemoryConfig{Enabled: true, Limit: 5, MaxChars: 8 << 10},
 		Auth:      AuthConfig{},
 		Scheduler: SchedulerConfig{PollIntervalSeconds: 5, LeaseDurationSeconds: 300, BatchSize: 32},
-		Channels:  ChannelsConfig{MaxInflight: 32, DedupeTTLSeconds: 86400},
-		Title:     TitleConfig{Enabled: true, MaxWords: 6, MaxChars: 60},
+		Channels: ChannelsConfig{
+			MaxInflight: 32, QueueCapacity: 128, DedupeTTLSeconds: 86400,
+			UnauthorizedReply: "This channel identity is not connected to Gofer.",
+			Webhook:           ChannelWebhookConfig{TimeoutSeconds: 10, MaxAttempts: 3, MaxBodyBytes: 1 << 20, ClockSkewSeconds: 300},
+		},
+		Title: TitleConfig{Enabled: true, MaxWords: 6, MaxChars: 60},
 		Suggestions: SuggestionsConfig{
 			Enabled: true, MaxSuggestions: 3,
 		},
@@ -579,10 +609,65 @@ func validateServices(auth AuthConfig, scheduler SchedulerConfig, channels Chann
 	if scheduler.PollIntervalSeconds < 1 || scheduler.LeaseDurationSeconds < scheduler.PollIntervalSeconds || scheduler.BatchSize < 1 || scheduler.BatchSize > 1000 {
 		return fmt.Errorf("%w: invalid scheduler limits", ErrInvalid)
 	}
-	if channels.MaxInflight < 1 || channels.MaxInflight > 10_000 || channels.DedupeTTLSeconds < 60 {
+	return validateChannels(channels)
+}
+
+func validateChannels(channels ChannelsConfig) error {
+	if channels.MaxInflight < 1 || channels.MaxInflight > 10_000 || channels.QueueCapacity < channels.MaxInflight || channels.QueueCapacity > 100_000 || channels.DedupeTTLSeconds < 60 || len(channels.UnauthorizedReply) > 2000 {
 		return fmt.Errorf("%w: invalid channel limits", ErrInvalid)
 	}
+	if err := validateChannelWebhook(channels.Enabled, channels.Webhook); err != nil {
+		return err
+	}
+	return validateChannelBindings(channels.Bindings)
+}
+
+func validateChannelWebhook(channelsEnabled bool, webhook ChannelWebhookConfig) error {
+	if !webhook.Enabled {
+		return nil
+	}
+	if !channelsEnabled || len(strings.TrimSpace(webhook.Secret)) < 24 || strings.TrimSpace(webhook.OutboundURL) == "" || webhook.TimeoutSeconds < 1 || webhook.TimeoutSeconds > 120 || webhook.MaxAttempts < 1 || webhook.MaxAttempts > 5 || webhook.MaxBodyBytes < 1024 || webhook.MaxBodyBytes > 16<<20 || webhook.ClockSkewSeconds < 60 || webhook.ClockSkewSeconds > 3600 {
+		return fmt.Errorf("%w: invalid channel webhook configuration", ErrInvalid)
+	}
+	parsed, err := url.Parse(strings.TrimSpace(webhook.OutboundURL))
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" || parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("%w: invalid channel webhook outbound_url", ErrInvalid)
+	}
 	return nil
+}
+
+func validateChannelBindings(bindings []ChannelBindingConfig) error {
+	identities := make(map[string]struct{}, len(bindings))
+	for _, binding := range bindings {
+		provider := strings.ToLower(strings.TrimSpace(binding.Provider))
+		key := provider + "\xff" + strings.TrimSpace(binding.WorkspaceID) + "\xff" + strings.TrimSpace(binding.ExternalUserID)
+		if strings.TrimSpace(binding.UserID) == "" || len(binding.UserID) > 128 || !validChannelProvider(provider) || provider != binding.Provider ||
+			strings.TrimSpace(binding.WorkspaceID) != binding.WorkspaceID || len(binding.WorkspaceID) > 256 || strings.TrimSpace(binding.ExternalUserID) == "" || len(binding.ExternalUserID) > 256 ||
+			len(binding.WorkspaceName) > 512 || len(binding.ExternalUserName) > 512 {
+			return fmt.Errorf("%w: invalid channel binding", ErrInvalid)
+		}
+		if _, duplicate := identities[key]; duplicate {
+			return fmt.Errorf("%w: duplicate channel binding", ErrInvalid)
+		}
+		identities[key] = struct{}{}
+	}
+	return nil
+}
+
+func validChannelProvider(value string) bool {
+	if value == "" || len(value) > 32 {
+		return false
+	}
+	for _, character := range value {
+		if character < 'a' || character > 'z' {
+			if character < '0' || character > '9' {
+				if character != '-' && character != '_' {
+					return false
+				}
+			}
+		}
+	}
+	return true
 }
 
 func (config Config) validateCore() error {

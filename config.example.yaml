@@ -141,7 +141,24 @@ scheduler:
 channels:
   enabled: false
   max_inflight: 32
+  queue_capacity: 128
   dedupe_ttl_seconds: 86400
+  unauthorized_reply: This channel identity is not connected to Gofer.
+  bindings: []
+  # bindings:
+  #   - user_id: local
+  #     provider: webhook
+  #     workspace_id: example
+  #     external_user_id: user-123
+  webhook:
+    enabled: false
+    secret: ""
+    outbound_url: ""
+    timeout_seconds: 10
+    max_attempts: 3
+    max_body_bytes: 1048576
+    clock_skew_seconds: 300
+    allow_private_addresses: false
 
 # Empty conversations receive a bounded local title after their first user
 # turn. Set model_name to use a configured model alias instead; failures still

@@ -49,6 +49,10 @@ const (
 	MemoryRead Permission = "memory:read"
 	// MemoryWrite permits creating, importing, changing, and clearing memory.
 	MemoryWrite Permission = "memory:write"
+	// ChannelsRead permits viewing channel status and owned connections.
+	ChannelsRead Permission = "channels:read"
+	// ChannelsWrite permits connecting and revoking owned channel identities.
+	ChannelsWrite Permission = "channels:write"
 )
 
 // Principal is an authenticated identity with bounded permissions.
@@ -223,6 +227,12 @@ func feedbackPermission(request *http.Request) (Permission, bool) {
 
 func resourcePermission(request *http.Request) (Permission, bool) {
 	path := request.URL.Path
+	if path == "/api/channels" || path == "/api/channel-connections" || strings.HasPrefix(path, "/api/channel-connections/") {
+		if request.Method == http.MethodGet {
+			return ChannelsRead, true
+		}
+		return ChannelsWrite, true
+	}
 	if permission, matched := conversationServicePermission(request); matched {
 		return permission, true
 	}

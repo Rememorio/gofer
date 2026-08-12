@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-type resolverFunc func(context.Context, string, string, string) (string, error)
+type resolverFunc func(context.Context, string, string, string) (Identity, error)
 
-func (function resolverFunc) Resolve(ctx context.Context, a, b, c string) (string, error) {
+func (function resolverFunc) Resolve(ctx context.Context, a, b, c string) (Identity, error) {
 	return function(ctx, a, b, c)
 }
 
@@ -45,8 +45,8 @@ func (sender *fakeSender) Close() error {
 func TestManagerAuthenticatesDispatchesAndDeduplicates(t *testing.T) {
 	t.Parallel()
 	sender := &fakeSender{}
-	manager, err := NewManager(Config{Resolver: resolverFunc(func(context.Context, string, string, string) (string, error) { return "user", nil }), Dispatcher: dispatcherFunc(func(_ context.Context, request Request) (Reply, error) {
-		if request.ThreadKey != "test:workspace:user:topic" {
+	manager, err := NewManager(Config{Resolver: resolverFunc(func(context.Context, string, string, string) (Identity, error) { return testIdentity(), nil }), Dispatcher: dispatcherFunc(func(_ context.Context, request Request) (Reply, error) {
+		if request.ThreadKey != "test\xffworkspace\xffchn_00000000000000000000000000000000\xffchat\xfftopic" {
 			t.Errorf("key=%q", request.ThreadKey)
 		}
 		request.Message.Metadata["x"] = "changed"
@@ -80,7 +80,7 @@ func TestManagerBoundsInflightAndRetriesFailures(t *testing.T) {
 	var active, peak atomic.Int32
 	release := make(chan struct{})
 	sender := &fakeSender{}
-	manager, _ := NewManager(Config{Resolver: resolverFunc(func(context.Context, string, string, string) (string, error) { return "u", nil }), Dispatcher: dispatcherFunc(func(ctx context.Context, _ Request) (Reply, error) {
+	manager, _ := NewManager(Config{Resolver: resolverFunc(func(context.Context, string, string, string) (Identity, error) { return testIdentity(), nil }), Dispatcher: dispatcherFunc(func(ctx context.Context, _ Request) (Reply, error) {
 		current := active.Add(1)
 		defer active.Add(-1)
 		for {
@@ -129,7 +129,9 @@ func TestManagerBoundsInflightAndRetriesFailures(t *testing.T) {
 func TestManagerAuthorizationProvidersAndClose(t *testing.T) {
 	t.Parallel()
 	sender := &fakeSender{}
-	manager, _ := NewManager(Config{Resolver: resolverFunc(func(context.Context, string, string, string) (string, error) { return "", errors.New("unbound") }), Dispatcher: dispatcherFunc(func(context.Context, Request) (Reply, error) { return Reply{}, nil }), Dedupe: NewMemoryDedupe(), MaxInflight: 1, DedupeTTL: time.Minute})
+	manager, _ := NewManager(Config{Resolver: resolverFunc(func(context.Context, string, string, string) (Identity, error) {
+		return Identity{}, errors.New("unbound")
+	}), Dispatcher: dispatcherFunc(func(context.Context, Request) (Reply, error) { return Reply{}, nil }), Dedupe: NewMemoryDedupe(), MaxInflight: 1, DedupeTTL: time.Minute})
 	if err := manager.Register(sender); err != nil {
 		t.Fatal(err)
 	}
@@ -153,6 +155,165 @@ func TestManagerAuthorizationProvidersAndClose(t *testing.T) {
 	}
 	if sender.closed != 1 {
 		t.Fatalf("closed=%d", sender.closed)
+	}
+}
+
+func TestManagerStartsBoundedQueueAndStopsWorkers(t *testing.T) {
+	t.Parallel()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	processed := make(chan string, 2)
+	manager, err := NewManager(Config{
+		Resolver: resolverFunc(func(context.Context, string, string, string) (Identity, error) { return testIdentity(), nil }),
+		Dispatcher: dispatcherFunc(func(ctx context.Context, request Request) (Reply, error) {
+			select {
+			case <-started:
+			default:
+				close(started)
+			}
+			select {
+			case <-ctx.Done():
+				return Reply{}, ctx.Err()
+			case <-release:
+				processed <- request.Message.ID
+				return Reply{Text: "done"}, nil
+			}
+		}),
+		Dedupe: NewMemoryDedupe(), MaxInflight: 1, QueueCapacity: 1, DedupeTTL: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustStartManager(t, manager)
+	mustSubmitMessage(t, manager, validMessage())
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not start")
+	}
+	second := validMessage()
+	second.ID = "2"
+	mustSubmitMessage(t, manager, second)
+	third := validMessage()
+	third.ID = "3"
+	if err = manager.Submit(context.Background(), third); !errors.Is(err, ErrBusy) {
+		t.Fatalf("full queue Submit() = %v", err)
+	}
+	stats := manager.Stats()
+	if !stats.Running || stats.QueueDepth != 1 || stats.QueueCapacity != 1 || stats.MaxInflight != 1 {
+		t.Fatalf("Stats() = %#v", stats)
+	}
+	close(release)
+	for range 2 {
+		select {
+		case <-processed:
+		case <-time.After(time.Second):
+			t.Fatal("queued message did not complete")
+		}
+	}
+	if err = manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = manager.Submit(context.Background(), third); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Submit(closed) = %v", err)
+	}
+}
+
+func mustStartManager(t *testing.T, manager *Manager) {
+	t.Helper()
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("second Start() = %v", err)
+	}
+}
+
+func mustSubmitMessage(t *testing.T, manager *Manager, message Message) {
+	t.Helper()
+	if err := manager.Submit(context.Background(), message); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManagerSerializesOneConversationWithoutBlockingOthers(t *testing.T) {
+	t.Parallel()
+	var activeSame, peakSame atomic.Int32
+	entered := make(chan string, 3)
+	releaseSame := make(chan struct{})
+	manager, _ := NewManager(Config{
+		Resolver: resolverFunc(func(_ context.Context, _, _, external string) (Identity, error) {
+			identity := testIdentity()
+			if external == "other" {
+				identity.BindingID = "chn_11111111111111111111111111111111"
+			}
+			return identity, nil
+		}),
+		Dispatcher: dispatcherFunc(func(ctx context.Context, request Request) (Reply, error) {
+			if request.Message.ExternalUserID == "other" {
+				entered <- "other"
+				return Reply{Text: "done"}, nil
+			}
+			current := activeSame.Add(1)
+			defer activeSame.Add(-1)
+			for old := peakSame.Load(); current > old && !peakSame.CompareAndSwap(old, current); old = peakSame.Load() {
+			}
+			entered <- request.Message.ID
+			select {
+			case <-ctx.Done():
+				return Reply{}, ctx.Err()
+			case <-releaseSame:
+				return Reply{Text: "done"}, nil
+			}
+		}),
+		Dedupe: NewMemoryDedupe(), MaxInflight: 3, DedupeTTL: time.Minute,
+	})
+	_ = manager.Register(&fakeSender{})
+	messages := []Message{validMessage(), validMessage(), validMessage()}
+	messages[1].ID = "2"
+	messages[2].ID, messages[2].ExternalUserID, messages[2].ChatID = "3", "other", "other-chat"
+	var wait sync.WaitGroup
+	for _, message := range messages {
+		wait.Add(1)
+		go func(message Message) { defer wait.Done(); _ = manager.Handle(context.Background(), message) }(message)
+	}
+	seenOther := false
+	deadline := time.After(time.Second)
+	for count := 0; count < 2; count++ {
+		select {
+		case value := <-entered:
+			seenOther = seenOther || value == "other"
+		case <-deadline:
+			t.Fatal("dispatches did not enter")
+		}
+	}
+	if !seenOther {
+		t.Fatal("different conversation was blocked")
+	}
+	close(releaseSame)
+	wait.Wait()
+	if peakSame.Load() != 1 {
+		t.Fatalf("same-conversation peak = %d", peakSame.Load())
+	}
+}
+
+func TestManagerSendsUnauthorizedConnectionHint(t *testing.T) {
+	t.Parallel()
+	sender := &fakeSender{}
+	manager, _ := NewManager(Config{
+		Resolver:   resolverFunc(func(context.Context, string, string, string) (Identity, error) { return Identity{}, ErrNotFound }),
+		Dispatcher: dispatcherFunc(func(context.Context, Request) (Reply, error) { return Reply{}, nil }),
+		Dedupe:     NewMemoryDedupe(), MaxInflight: 1, DedupeTTL: time.Minute,
+		UnauthorizedReply: "connect first",
+	})
+	_ = manager.Register(sender)
+	if err := manager.Handle(context.Background(), validMessage()); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("Handle() = %v", err)
+	}
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	if len(sender.replies) != 1 || sender.replies[0].Text != "connect first" || sender.replies[0].InReplyTo != "1" {
+		t.Fatalf("replies = %#v", sender.replies)
 	}
 }
 
@@ -196,7 +357,7 @@ func TestMessageAndConfigValidation(t *testing.T) {
 			t.Fatalf("Validate=%v", err)
 		}
 	}
-	config := Config{Resolver: resolverFunc(func(context.Context, string, string, string) (string, error) { return "u", nil }), Dispatcher: dispatcherFunc(func(context.Context, Request) (Reply, error) { return Reply{}, nil }), Dedupe: NewMemoryDedupe(), MaxInflight: 1, DedupeTTL: time.Minute}
+	config := Config{Resolver: resolverFunc(func(context.Context, string, string, string) (Identity, error) { return testIdentity(), nil }), Dispatcher: dispatcherFunc(func(context.Context, Request) (Reply, error) { return Reply{}, nil }), Dedupe: NewMemoryDedupe(), MaxInflight: 1, DedupeTTL: time.Minute}
 	if _, err := NewManager(config); err != nil {
 		t.Fatal(err)
 	}
@@ -211,4 +372,8 @@ func TestMessageAndConfigValidation(t *testing.T) {
 
 func validMessage() Message {
 	return Message{ID: "1", Provider: "test", WorkspaceID: "workspace", ExternalUserID: "external", ChatID: "chat", TopicID: "topic", Text: "hello", Metadata: map[string]string{"x": "y"}, ReceivedAt: time.Now()}
+}
+
+func testIdentity() Identity {
+	return Identity{BindingID: "chn_00000000000000000000000000000000", UserID: "user"}
 }
