@@ -115,3 +115,15 @@ models:
       display_name: GPT-5
       supports_thinking: true
       supports_vision: true
+
+  # Native Anthropic Messages API example. Use api_key for X-Api-Key auth, or
+  # auth_token for Bearer auth; never configure both.
+  # - name: claude
+  #   provider: anthropic
+  #   model: claude-sonnet-4-6
+  #   api_key: $ANTHROPIC_API_KEY
+  #   max_tokens: 8192
+  #   options:
+  #     display_name: Claude Sonnet
+  #     supports_thinking: true
+  #     supports_vision: true

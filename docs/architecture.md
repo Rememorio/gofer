@@ -40,6 +40,9 @@ Planned package groups:
 | `internal/delivery` | Run-scoped presentation tracking and terminal output verification |
 | `internal/thread` | Threads, messages, history, and checkpoints |
 | `internal/model` | Normalized model request, response, stream, and usage types |
+| `internal/model/providerfactory` | Validated provider selection without SDK leakage into the service |
+| `internal/model/openaichat` | OpenAI-compatible Chat Completions streaming adapter |
+| `internal/model/anthropicmessages` | Native Anthropic Messages streaming adapter |
 | `internal/usage` | Journal-derived run/thread token accounting and caller attribution |
 | `internal/tool` | Typed registry, validation, policy, and execution |
 | `internal/guardrail` | Temporary user-input framing and recursive untrusted-result neutralization |
@@ -100,3 +103,4 @@ Planned package groups:
 27. A tool-using user turn ends with visible assistant text or an explicit durable run failure.
 28. Length-capped tool intent never executes; only visible tool-free partial text may complete as capped.
 29. Safety-capped responses are always visible and tool-free before any other response policy observes them.
+30. Provider SDK types never cross the normalized model boundary; all adapters preserve tool-call integrity and exact reported usage.

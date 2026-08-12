@@ -44,6 +44,7 @@ func (service *Service) resourceRoutes(mux *http.ServeMux) {
 
 type modelResource struct {
 	Name             string `json:"name"`
+	Provider         string `json:"provider"`
 	Model            string `json:"model"`
 	DisplayName      string `json:"display_name"`
 	SupportsThinking bool   `json:"supports_thinking"`
@@ -69,7 +70,10 @@ func (service *Service) getModel(writer http.ResponseWriter, request *http.Reque
 }
 
 func publicModel(model config.ModelConfig) modelResource {
-	resource := modelResource{Name: model.Name, Model: model.Model, DisplayName: model.Name, SupportsVision: true}
+	resource := modelResource{
+		Name: model.Name, Provider: model.Provider, Model: model.Model,
+		DisplayName: model.Name, SupportsVision: true,
+	}
 	if displayName, ok := model.Options["display_name"].(string); ok && strings.TrimSpace(displayName) != "" {
 		resource.DisplayName = strings.TrimSpace(displayName)
 	}

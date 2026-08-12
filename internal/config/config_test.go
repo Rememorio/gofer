@@ -39,18 +39,25 @@ models:
     api_key: $TEST_API_KEY
     options:
       temperature: 0.2
+  - name: native-claude
+    provider: anthropic
+    model: claude-test
+    auth_token: $ANTHROPIC_AUTH_TOKEN
+    max_tokens: 4096
 `
+	environment := map[string]string{"TEST_API_KEY": "secret", "ANTHROPIC_AUTH_TOKEN": "auth-token"}
 	config, err := Load(strings.NewReader(raw), WithEnvLookup(func(name string) (string, bool) {
-		if name == "TEST_API_KEY" {
-			return "secret", true
-		}
-		return "", false
+		value, exists := environment[name]
+		return value, exists
 	}))
 	if err != nil {
 		t.Fatalf("Load(): %v", err)
 	}
 	if config.Server.Address != "0.0.0.0:9000" || config.Models[0].APIKey != "secret" {
 		t.Fatalf("Load() = %#v", config)
+	}
+	if config.Models[1].AuthToken != "auth-token" || config.Models[1].MaxTokens != 4096 {
+		t.Fatalf("Anthropic model = %#v", config.Models[1])
 	}
 	if config.Runtime.MaxTurns != Defaults().Runtime.MaxTurns {
 		t.Fatalf("default runtime was not preserved: %#v", config.Runtime)
@@ -209,6 +216,21 @@ func TestValidateRejectsInvalidConfigurations(t *testing.T) {
 		{name: "channel inflight", mutate: func(config *Config) { config.Channels.MaxInflight = 0 }},
 		{name: "channel dedupe", mutate: func(config *Config) { config.Channels.DedupeTTLSeconds = 59 }},
 		{name: "model field", mutate: func(config *Config) { config.Models = []ModelConfig{{Name: "x"}} }},
+		{name: "model unsupported provider", mutate: func(config *Config) {
+			config.Models = []ModelConfig{{Name: "x", Provider: "other", Model: "m"}}
+		}},
+		{name: "model spaced identity", mutate: func(config *Config) {
+			config.Models = []ModelConfig{{Name: " x", Provider: "openai", Model: "m"}}
+		}},
+		{name: "model negative max tokens", mutate: func(config *Config) {
+			config.Models = []ModelConfig{{Name: "x", Provider: "anthropic", Model: "m", MaxTokens: -1}}
+		}},
+		{name: "OpenAI Anthropic settings", mutate: func(config *Config) {
+			config.Models = []ModelConfig{{Name: "x", Provider: "openai", Model: "m", AuthToken: "token"}}
+		}},
+		{name: "model duplicate credentials", mutate: func(config *Config) {
+			config.Models = []ModelConfig{{Name: "x", Provider: "anthropic", Model: "m", APIKey: "key", AuthToken: "token"}}
+		}},
 		{name: "model duplicate", mutate: func(config *Config) {
 			config.Models = []ModelConfig{{Name: "x", Provider: "p", Model: "m"}, {Name: "x", Provider: "p", Model: "m"}}
 		}},

@@ -53,7 +53,7 @@ func TestResourceDiscoveryAndSkillManagement(t *testing.T) {
 		t.Fatalf("models = %#v", models)
 	}
 	model := resourceRequest[modelResource](t, server.URL, http.MethodGet, "/api/models/primary", nil, "", http.StatusOK)
-	if model.Model != "gpt-test" {
+	if model.Provider != "openai" || model.Model != "gpt-test" {
 		t.Fatalf("model = %#v", model)
 	}
 	resourceRequest[map[string]string](t, server.URL, http.MethodGet, "/api/models/missing", nil, "", http.StatusNotFound)

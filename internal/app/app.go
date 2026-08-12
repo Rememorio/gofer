@@ -31,7 +31,7 @@ import (
 	"github.com/Rememorio/gofer/internal/mcp"
 	"github.com/Rememorio/gofer/internal/memory"
 	"github.com/Rememorio/gofer/internal/model"
-	"github.com/Rememorio/gofer/internal/model/openaichat"
+	"github.com/Rememorio/gofer/internal/model/providerfactory"
 	"github.com/Rememorio/gofer/internal/modellength"
 	"github.com/Rememorio/gofer/internal/observe"
 	"github.com/Rememorio/gofer/internal/policy"
@@ -253,10 +253,10 @@ func (service *Service) openProviders() error {
 		return errors.New("app: at least one model is required")
 	}
 	for _, cfg := range service.config.Models {
-		if cfg.Provider != "openai" {
-			return fmt.Errorf("app: unsupported model provider %q", cfg.Provider)
-		}
-		provider, err := openaichat.New(openaichat.Config{APIKey: cfg.APIKey, BaseURL: cfg.BaseURL})
+		provider, err := providerfactory.Open(providerfactory.Config{
+			Provider: cfg.Provider, APIKey: cfg.APIKey, AuthToken: cfg.AuthToken,
+			BaseURL: cfg.BaseURL, MaxTokens: cfg.MaxTokens,
+		})
 		if err != nil {
 			return fmt.Errorf("open model %s: %w", cfg.Name, err)
 		}

@@ -11,8 +11,9 @@ one is written in Go.
 ## Status
 
 Gofer is under active development. The engineering foundation, durable core,
-normalized streaming model API, OpenAI-compatible adapter, validated tool
-registry, event-journaled agent loop, traversal-resistant thread workspaces,
+normalized streaming model API, OpenAI-compatible Chat Completions and native
+Anthropic Messages adapters, validated tool registry, event-journaled agent
+loop, traversal-resistant thread workspaces,
 artifact catalog, built-in file tools, and fail-closed policy middleware are in
 place. MCP servers can contribute validated tools over stdio or Streamable
 HTTP, and Skills packages support strict metadata, persistent enablement,
@@ -144,6 +145,8 @@ Provider output-length handling is documented in
 [Model length caps](docs/model-length.md).
 Provider content-filter handling is documented in
 [Safety finish reasons](docs/safety-finish.md).
+Provider configuration and normalized protocol behavior are documented in
+[Model providers](docs/model-providers.md).
 
 ## Development
 

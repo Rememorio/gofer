@@ -8,9 +8,9 @@ module is committed and pushed separately.
 2. **Durable core:** configuration, domain identifiers, typed events, threads,
    runs, checkpoints, and an in-memory reference store.
 3. **Agent loop:** normalized model API, streaming, middleware, tool calls,
-   input/result guardrails, loop detection, interrupted-history repair,
-   terminal-response, model-length, and safety-finish recovery, budgets,
-   cancellation, and deterministic replay.
+   OpenAI-compatible and native Anthropic providers, input/result guardrails,
+   loop detection, interrupted-history repair, terminal-response, model-length,
+   and safety-finish recovery, budgets, cancellation, and deterministic replay.
 4. **Tools and extensions:** built-ins, MCP client integration, skills, file
    workspace, read-before-write version gates, artifacts, and policy enforcement.
 5. **Execution:** local and container sandboxes with resource and path limits.

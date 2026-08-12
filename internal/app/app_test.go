@@ -469,6 +469,30 @@ func TestServiceConstructionAndHelpers(t *testing.T) {
 	}
 }
 
+func TestServiceConstructsNativeAnthropicProvider(t *testing.T) {
+	t.Parallel()
+	cfg := config.Defaults()
+	cfg.Storage.Driver = "memory"
+	cfg.Workspace.Root = t.TempDir()
+	cfg.Models = []config.ModelConfig{{
+		Name: "claude", Provider: "anthropic", Model: "claude-test",
+		AuthToken: "oauth-token", BaseURL: "https://api.example.test", MaxTokens: 4096,
+	}}
+	service, err := New(context.Background(), cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = service.Close() }()
+	configured, err := service.selectProvider("claude")
+	if err != nil || configured.model != "claude-test" {
+		t.Fatalf("provider = %#v, %v", configured, err)
+	}
+	resource := publicModel(cfg.Models[0])
+	if resource.Provider != "anthropic" || resource.Model != "claude-test" {
+		t.Fatalf("resource = %#v", resource)
+	}
+}
+
 func TestServiceAssemblesBrowserAndDockerTools(t *testing.T) {
 	t.Parallel()
 	modelServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))

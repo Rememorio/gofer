@@ -210,12 +210,14 @@ type ChannelsConfig struct {
 
 // ModelConfig names one model exposed to agent runs.
 type ModelConfig struct {
-	Name     string         `yaml:"name" json:"name"`
-	Provider string         `yaml:"provider" json:"provider"`
-	Model    string         `yaml:"model" json:"model"`
-	APIKey   string         `yaml:"api_key" json:"-"`
-	BaseURL  string         `yaml:"base_url" json:"base_url,omitempty"`
-	Options  map[string]any `yaml:"options" json:"options,omitempty"`
+	Name      string         `yaml:"name" json:"name"`
+	Provider  string         `yaml:"provider" json:"provider"`
+	Model     string         `yaml:"model" json:"model"`
+	APIKey    string         `yaml:"api_key" json:"-"`
+	AuthToken string         `yaml:"auth_token" json:"-"`
+	BaseURL   string         `yaml:"base_url" json:"base_url,omitempty"`
+	MaxTokens int            `yaml:"max_tokens" json:"max_tokens,omitempty"`
+	Options   map[string]any `yaml:"options" json:"options,omitempty"`
 }
 
 // Option customizes configuration loading.
@@ -549,6 +551,16 @@ func validateModels(models []ModelConfig) error {
 	for index, model := range models {
 		if strings.TrimSpace(model.Name) == "" || strings.TrimSpace(model.Provider) == "" || strings.TrimSpace(model.Model) == "" {
 			return fmt.Errorf("%w: models[%d] requires name, provider, and model", ErrInvalid, index)
+		}
+		if strings.TrimSpace(model.Name) != model.Name || strings.TrimSpace(model.Provider) != model.Provider ||
+			strings.TrimSpace(model.Model) != model.Model || !oneOf(model.Provider, "openai", "anthropic") || model.MaxTokens < 0 {
+			return fmt.Errorf("%w: invalid models[%d] identity, provider, or token limit", ErrInvalid, index)
+		}
+		if model.Provider == "openai" && model.AuthToken != "" {
+			return fmt.Errorf("%w: models[%d] uses Anthropic-only configuration", ErrInvalid, index)
+		}
+		if model.APIKey != "" && model.AuthToken != "" {
+			return fmt.Errorf("%w: models[%d] credentials are mutually exclusive", ErrInvalid, index)
 		}
 		if _, duplicate := names[model.Name]; duplicate {
 			return fmt.Errorf("%w: duplicate model name %q", ErrInvalid, model.Name)

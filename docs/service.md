@@ -12,6 +12,13 @@ export OPENAI_API_KEY=your-key
 go run . serve --config config.yaml
 ```
 
+Each entry under `models` selects a protocol with `provider`. `openai` uses
+Chat Completions and supports OpenAI-compatible gateways; `anthropic` uses the
+native Messages API. Model aliases can mix both providers in one process, and
+`GET /api/models` reports each alias's provider without exposing credentials.
+See [Model providers](model-providers.md) for configuration and normalization
+details.
+
 SQLite is the default and its parent directory is created automatically. Use
 `storage.driver: memory` for disposable development or `postgres` with a pgx
 connection string for a shared service. The local sandbox remains disabled
