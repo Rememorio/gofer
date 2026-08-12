@@ -34,6 +34,9 @@ store interface, so transport code does not own model or database behavior.
 - Memory CRUD, status, reload, and import/export endpoints share the scoped
   store used by agent recall and tools. Atomic imports and exact-scope updates
   prevent cross-user or cross-thread replacement.
+- Assistant discovery and create-and-stream/wait run variants match the
+  LangGraph client initialization flow. Stateless runs either create an owned
+  thread or reuse the explicitly configured owned thread.
 
 The gateway reserves the `user_id` metadata key for its authenticated owner.
 It is never accepted from or returned to clients. Every thread, run, event,
@@ -61,7 +64,10 @@ The stream endpoint writes journal sequence numbers as SSE IDs. A reconnecting
 client may provide `Last-Event-ID`; Gofer first replays every durable event
 after that sequence, then watches for new commits. Notifications are only wake
 hints—the consumer always rereads ordered storage—so coalescing cannot lose
-events. Terminal runs close their stream after all available events are sent.
+events. A terminal status starts a bounded journal-drain window, and an
+observed terminal event closes immediately. This covers the intentional
+status-before-final-event commit ordering without leaving legacy incomplete
+journals open forever.
 
 ## SQL storage
 

@@ -173,6 +173,12 @@ func GatewayPolicy(request *http.Request) (Permission, bool) {
 	if permission, matched := resourcePermission(request); matched {
 		return permission, false
 	}
+	if request.Method == http.MethodPost && strings.Contains(path, "/runs/") && strings.HasSuffix(path, "/stream") {
+		if request.URL.Query().Get("action") != "" {
+			return RunsCancel, false
+		}
+		return RunsRead, false
+	}
 	if strings.Contains(path, "/runs/") && strings.HasSuffix(path, "/cancel") {
 		return RunsCancel, false
 	}
@@ -200,10 +206,11 @@ func GatewayPolicy(request *http.Request) (Permission, bool) {
 func resourcePermission(request *http.Request) (Permission, bool) {
 	path := request.URL.Path
 	resourcePath := path == "/api/models" || strings.HasPrefix(path, "/api/models/") || path == "/api/features" ||
+		path == "/api/assistants" || strings.HasPrefix(path, "/api/assistants/") ||
 		path == "/api/skills" || strings.HasPrefix(path, "/api/skills/") ||
 		strings.HasPrefix(path, "/api/threads/") && (strings.Contains(path, "/uploads") || strings.Contains(path, "/artifacts"))
 	if resourcePath {
-		if request.Method == http.MethodGet {
+		if request.Method == http.MethodGet || path == "/api/assistants/search" && request.Method == http.MethodPost {
 			return ResourcesRead, true
 		}
 		return ResourcesWrite, true

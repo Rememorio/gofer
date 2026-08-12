@@ -146,10 +146,17 @@ func (handler *Handler) routes() {
 	handler.mux.HandleFunc("GET /api/threads/{thread_id}", handler.getThread)
 	handler.threadRoutes()
 	handler.mux.HandleFunc("POST /api/threads/{thread_id}/runs", handler.createRun)
+	handler.mux.HandleFunc("POST /api/threads/{thread_id}/runs/stream", handler.streamRun)
+	handler.mux.HandleFunc("POST /api/threads/{thread_id}/runs/wait", handler.waitRun)
 	handler.mux.HandleFunc("GET /api/threads/{thread_id}/runs/{run_id}", handler.getRun)
 	handler.mux.HandleFunc("POST /api/threads/{thread_id}/runs/{run_id}/cancel", handler.cancelRun)
 	handler.mux.HandleFunc("GET /api/threads/{thread_id}/runs/{run_id}/events", handler.listEvents)
 	handler.mux.HandleFunc("GET /api/threads/{thread_id}/runs/{run_id}/stream", handler.streamEvents)
+	handler.mux.HandleFunc("POST /api/threads/{thread_id}/runs/{run_id}/stream", handler.postStreamEvents)
+	handler.mux.HandleFunc("GET /api/threads/{thread_id}/runs/{run_id}/join", handler.streamEvents)
+	handler.mux.HandleFunc("POST /api/runs/stream", handler.statelessStreamRun)
+	handler.mux.HandleFunc("POST /api/runs/wait", handler.statelessWaitRun)
+	handler.mux.HandleFunc("GET /api/runs/{run_id}/messages", handler.listMessagesByRunID)
 }
 
 func (handler *Handler) createThread(writer http.ResponseWriter, request *http.Request) {
@@ -233,30 +240,31 @@ func (handler *Handler) createRun(writer http.ResponseWriter, request *http.Requ
 		writeError(writer, err)
 		return
 	}
+	run, err := handler.startRun(request.Context(), threadID, input)
+	if err != nil {
+		writeError(writer, err)
+		return
+	}
+	writer.Header().Set("Content-Location", "/api/threads/"+string(threadID)+"/runs/"+string(run.ID))
+	writeJSON(writer, http.StatusCreated, makeRunResponse(run))
+}
+
+func (handler *Handler) startRun(ctx context.Context, threadID domain.ThreadID, input RunRequest) (domain.Run, error) {
 	run, err := domain.NewRun(threadID, handler.now())
 	if err == nil {
-		err = handler.store.CreateRun(request.Context(), run)
+		err = handler.store.CreateRun(ctx, run)
 	}
 	if err == nil {
 		var draft event.Draft
 		draft, err = event.NewDraft(threadID, run.ID, event.RunCreated, handler.now(), map[string]any{})
 		if err == nil {
-			_, err = handler.store.Append(request.Context(), run.ID, 0, draft)
+			_, err = handler.store.Append(ctx, run.ID, 0, draft)
 		}
 	}
-	if err != nil {
-		writeError(writer, err)
-		return
+	if err == nil && handler.starter != nil {
+		err = handler.starter.Start(ctx, StartRequest{RunID: run.ID, ThreadID: threadID, Request: input})
 	}
-	if handler.starter != nil {
-		launch := StartRequest{RunID: run.ID, ThreadID: threadID, Request: input}
-		if err = handler.starter.Start(request.Context(), launch); err != nil {
-			writeError(writer, err)
-			return
-		}
-	}
-	writer.Header().Set("Content-Location", "/api/threads/"+string(threadID)+"/runs/"+string(run.ID))
-	writeJSON(writer, http.StatusCreated, makeRunResponse(run))
+	return run, err
 }
 
 func (handler *Handler) getRun(writer http.ResponseWriter, request *http.Request) {
@@ -337,22 +345,42 @@ func (handler *Handler) streamEvents(writer http.ResponseWriter, request *http.R
 	writer.Header().Set("X-Accel-Buffering", "no")
 	writer.WriteHeader(http.StatusOK)
 	flusher.Flush()
+	handler.streamJournal(request.Context(), writer, flusher, run.ID, after, watch)
+}
+
+func (handler *Handler) streamJournal(ctx context.Context, writer io.Writer, flusher http.Flusher, runID domain.RunID, after uint64, watch <-chan uint64) {
 	ticker := time.NewTicker(handler.keepAlive)
 	defer ticker.Stop()
+	var terminalTimer *time.Timer
+	var terminalTimeout <-chan time.Time
+	defer func() {
+		if terminalTimer != nil {
+			terminalTimer.Stop()
+		}
+	}()
 	for {
-		latest, streamErr := handler.writeAvailable(request.Context(), writer, flusher, run.ID, after)
+		latest, terminalEvent, streamErr := handler.writeAvailable(ctx, writer, flusher, runID, after)
 		if streamErr != nil {
 			return
 		}
 		after = latest
-		current, runErr := handler.store.Run(request.Context(), run.ID)
-		if runErr != nil || current.Terminal() {
+		if terminalEvent {
 			return
 		}
+		current, runErr := handler.store.Run(ctx, runID)
+		if runErr != nil {
+			return
+		}
+		if current.Terminal() && terminalTimer == nil {
+			terminalTimer = time.NewTimer(500 * time.Millisecond)
+			terminalTimeout = terminalTimer.C
+		}
 		select {
-		case <-request.Context().Done():
+		case <-ctx.Done():
 			return
 		case <-watch:
+		case <-terminalTimeout:
+			return
 		case <-ticker.C:
 			_, _ = io.WriteString(writer, ": keepalive\n\n")
 			flusher.Flush()
@@ -360,23 +388,25 @@ func (handler *Handler) streamEvents(writer http.ResponseWriter, request *http.R
 	}
 }
 
-func (handler *Handler) writeAvailable(ctx context.Context, writer io.Writer, flusher http.Flusher, runID domain.RunID, after uint64) (uint64, error) {
+func (handler *Handler) writeAvailable(ctx context.Context, writer io.Writer, flusher http.Flusher, runID domain.RunID, after uint64) (uint64, bool, error) {
 	records, err := handler.store.Events(ctx, runID, after, 0)
 	if err != nil {
-		return after, err
+		return after, false, err
 	}
+	terminal := false
 	for _, record := range records {
 		data, marshalErr := json.Marshal(record)
 		if marshalErr != nil {
-			return after, marshalErr
+			return after, false, marshalErr
 		}
 		if _, err = fmt.Fprintf(writer, "id: %d\nevent: %s\ndata: %s\n\n", record.Sequence, record.Kind, data); err != nil {
-			return after, err
+			return after, false, err
 		}
 		after = record.Sequence
+		terminal = terminal || record.Kind == event.RunCompleted || record.Kind == event.RunFailed || record.Kind == event.RunCancelled
 		flusher.Flush()
 	}
-	return after, nil
+	return after, terminal, nil
 }
 
 func (handler *Handler) scopedRun(request *http.Request) (domain.Run, error) {

@@ -395,7 +395,7 @@ func (service *Service) Start(ctx context.Context, launch gateway.StartRequest) 
 }
 
 func (service *Service) selectProvider(name string) (configuredProvider, error) {
-	if name == "" {
+	if name == "" || name == "lead_agent" {
 		name = service.config.Models[0].Name
 	}
 	provider, ok := service.providers[name]

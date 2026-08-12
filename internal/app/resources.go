@@ -25,6 +25,7 @@ import (
 const maxUploadFiles = 20
 
 func (service *Service) resourceRoutes(mux *http.ServeMux) {
+	service.assistantRoutes(mux)
 	mux.HandleFunc("GET /api/models", service.listModels)
 	mux.HandleFunc("GET /api/models/{model_name}", service.getModel)
 	mux.HandleFunc("GET /api/features", service.listFeatures)
@@ -389,6 +390,8 @@ func writeResourceError(writer http.ResponseWriter, err error) {
 	case errors.Is(err, workspace.ErrTooLarge):
 		status = http.StatusRequestEntityTooLarge
 	case errors.Is(err, workspace.ErrInvalidPath), errors.Is(err, workspace.ErrNotRegular), errors.Is(err, artifact.ErrInvalidArtifact):
+		status = http.StatusBadRequest
+	case errors.Is(err, store.ErrInvalidQuery):
 		status = http.StatusBadRequest
 	}
 	writeResourceJSON(writer, status, map[string]string{"error": http.StatusText(status)})

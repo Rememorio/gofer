@@ -54,8 +54,22 @@ curl -sS -X POST http://127.0.0.1:8001/api/threads/THREAD_ID/runs \
     "assistant_id":"primary",
     "input":{"messages":[{"role":"user","content":"Write a short report."}]},
     "context":{"max_tokens":4096,"temperature":0.2}
-  }'
+}'
 ```
+
+LangGraph-compatible clients can discover the default `lead_agent` alias and
+every configured model alias:
+
+```text
+POST /api/assistants/search
+GET  /api/assistants/{assistant_id}
+GET  /api/assistants/{assistant_id}/graph
+GET  /api/assistants/{assistant_id}/schemas
+```
+
+`lead_agent` selects the first configured model. Graph and schema responses
+describe Gofer's agent/tool loop and message state without exposing provider
+credentials.
 
 `assistant_id` selects a configured model alias. Inputs accept OpenAI-style
 roles as well as LangChain's `human` and `ai` message types. Text and image
@@ -83,7 +97,27 @@ Run events are available as JSON or resumable server-sent events:
 ```text
 GET /api/threads/{thread_id}/runs/{run_id}/events
 GET /api/threads/{thread_id}/runs/{run_id}/stream
+GET /api/threads/{thread_id}/runs/{run_id}/join
+POST /api/threads/{thread_id}/runs/{run_id}/stream
 ```
+
+Create-and-consume variants avoid a second request. The stateless forms create
+an owner-scoped thread unless `config.configurable.thread_id` selects an
+existing owned thread:
+
+```text
+POST /api/threads/{thread_id}/runs/stream
+POST /api/threads/{thread_id}/runs/wait
+POST /api/runs/stream
+POST /api/runs/wait
+GET  /api/runs/{run_id}/messages
+```
+
+Every streaming creation response sets a canonical `Content-Location` header.
+Terminal streams briefly drain the durable journal so a status transition
+cannot race and hide the final `run.completed`, `run.failed`, or
+`run.cancelled` event. Posting an existing stream with `action=interrupt` or
+`action=rollback` requests cancellation; `wait=1` waits for terminal state.
 
 Clients can discover configured capabilities and manage runtime skills without
 receiving provider credentials:

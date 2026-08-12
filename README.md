@@ -34,6 +34,9 @@ and journal-backed cross-run conversation continuity are also available.
 Model and feature discovery, durable skill enablement, bounded multipart
 uploads, persistent output discovery, and range-capable artifact delivery are
 exposed through the same owner-scoped API.
+LangGraph clients can discover configured assistants and use create-and-stream,
+create-and-wait, stateless run, join, and run-scoped message compatibility
+endpoints over the same durable journal.
 The `gofer serve` command now assembles the model provider, durable store,
 isolated workspaces, sandbox, browser, policy, runtime, gateway, graceful
 shutdown, and Prometheus endpoint into a runnable service. MCP tools, projected
