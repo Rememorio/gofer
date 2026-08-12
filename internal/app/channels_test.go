@@ -28,7 +28,10 @@ import (
 	"github.com/Rememorio/gofer/internal/store"
 )
 
-const appWebhookSecret = "app-webhook-secret-at-least-24-bytes"
+const (
+	appWebhookSecret   = "app-webhook-secret-at-least-24-bytes"
+	buzzTestPrivateKey = "0000000000000000000000000000000000000000000000000000000000000001"
+)
 
 type appChannelDispatcherFunc func(context.Context, channel.Request) (channel.Reply, error)
 
@@ -47,6 +50,7 @@ func TestOpenNativeChannelsRegistersConfiguredProviders(t *testing.T) {
 	cfg.Channels.DingTalk = config.ChannelDingTalkConfig{Enabled: true, ClientID: "client", ClientSecret: "secret", RequestTimeoutSeconds: 30, MaxAttempts: 3}
 	cfg.Channels.WeCom = config.ChannelWeComConfig{Enabled: true, BotID: "bot", BotSecret: "secret", WorkingMessage: "Working", HeartbeatSeconds: 30, RequestTimeoutSeconds: 20, MaxAttempts: 3}
 	cfg.Channels.WeChat = config.ChannelWeChatConfig{Enabled: true, BotToken: "token", ChannelVersion: "1.0", PollTimeoutSeconds: 35, RequestTimeoutSeconds: 45, MaxAttempts: 3}
+	cfg.Channels.Buzz = config.ChannelBuzzConfig{Enabled: true, RelayURL: "ws://relay.test", PrivateKey: buzzTestPrivateKey, RequireMention: true, RequestTimeoutSeconds: 20, MaxAttempts: 3}
 	state := channel.NewMemoryState()
 	manager, err := channel.NewManager(channel.Config{
 		Resolver: state, Dispatcher: appChannelDispatcherFunc(func(context.Context, channel.Request) (channel.Reply, error) { return channel.Reply{}, nil }),
@@ -59,7 +63,7 @@ func TestOpenNativeChannelsRegistersConfiguredProviders(t *testing.T) {
 	if err = service.openNativeChannels(manager); err != nil {
 		t.Fatal(err)
 	}
-	if providers := manager.Providers(); fmt.Sprint(providers) != "[dingtalk discord feishu slack telegram wechat wecom]" {
+	if providers := manager.Providers(); fmt.Sprint(providers) != "[buzz dingtalk discord feishu slack telegram wechat wecom]" {
 		t.Fatalf("providers = %v", providers)
 	}
 	if err = manager.Close(); err != nil {

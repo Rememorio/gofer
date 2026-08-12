@@ -237,6 +237,83 @@ models:
 	}
 }
 
+func TestBuzzChannelConfiguration(t *testing.T) {
+	t.Parallel()
+	const privateKey = "0000000000000000000000000000000000000000000000000000000000000001"
+	const publicKey = "c6047f9441ed7d6d3045406e95c07cd85a2dc2cc0de7a166f0a5c41b85b386b9"
+	config := Defaults()
+	config.Channels.Enabled = true
+	config.Channels.Buzz = ChannelBuzzConfig{
+		Enabled: true, RelayURL: "wss://relay.example", PrivateKey: privateKey, RelayPublicKey: publicKey,
+		AllowedUsers: []string{publicKey}, RequireMention: true, MentionFreeChannels: []string{"operations"},
+		RequestTimeoutSeconds: 20, MaxAttempts: 3,
+	}
+	if err := config.Validate(); err != nil {
+		t.Fatalf("Validate() = %v", err)
+	}
+	raw := `
+config_version: 1
+storage:
+  driver: memory
+channels:
+  enabled: true
+  buzz:
+    enabled: true
+    relay_url: wss://relay.example
+    private_key: $BUZZ_PRIVATE_KEY
+    relay_public_key: ""
+    allowed_users: []
+    require_mention: false
+    mention_free_channels: []
+    request_timeout_seconds: 30
+    max_attempts: 2
+`
+	loaded, err := Load(strings.NewReader(raw), WithEnvLookup(func(name string) (string, bool) { return privateKey, name == "BUZZ_PRIVATE_KEY" }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.Channels.Buzz.Enabled || loaded.Channels.Buzz.RequireMention || loaded.Channels.Buzz.RequestTimeoutSeconds != 30 {
+		t.Fatalf("Buzz config = %#v", loaded.Channels.Buzz)
+	}
+}
+
+func TestBuzzChannelRejectsUnsafeConfiguration(t *testing.T) {
+	t.Parallel()
+	const privateKey = "0000000000000000000000000000000000000000000000000000000000000001"
+	base := func() Config {
+		config := Defaults()
+		config.Channels.Enabled = true
+		config.Channels.Buzz = ChannelBuzzConfig{
+			Enabled: true, RelayURL: "wss://relay.example", PrivateKey: privateKey,
+			RequireMention: true, RequestTimeoutSeconds: 20, MaxAttempts: 3,
+		}
+		return config
+	}
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "channels disabled", mutate: func(config *Config) { config.Channels.Enabled = false }},
+		{name: "scheme", mutate: func(config *Config) { config.Channels.Buzz.RelayURL = "https://relay.example" }},
+		{name: "credentials", mutate: func(config *Config) { config.Channels.Buzz.RelayURL = "wss://user@relay.example" }},
+		{name: "private key", mutate: func(config *Config) { config.Channels.Buzz.PrivateKey = "short" }},
+		{name: "relay key", mutate: func(config *Config) { config.Channels.Buzz.RelayPublicKey = "short" }},
+		{name: "duplicate users", mutate: func(config *Config) { config.Channels.Buzz.AllowedUsers = []string{privateKey, privateKey} }},
+		{name: "mention channel", mutate: func(config *Config) { config.Channels.Buzz.MentionFreeChannels = []string{" bad"} }},
+		{name: "timeout", mutate: func(config *Config) { config.Channels.Buzz.RequestTimeoutSeconds = 0 }},
+		{name: "attempts", mutate: func(config *Config) { config.Channels.Buzz.MaxAttempts = 6 }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := base()
+			test.mutate(&config)
+			if err := config.Validate(); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Validate() = %v", err)
+			}
+		})
+	}
+}
+
 func TestLoadCanDisableRuntimeGuards(t *testing.T) {
 	t.Parallel()
 	config, err := Load(strings.NewReader("config_version: 1\nloop_detection:\n  enabled: false\nread_before_write:\n  enabled: false\nstorage:\n  driver: memory\n"))

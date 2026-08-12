@@ -35,7 +35,7 @@ The manager also provides two separate concurrency controls:
 ## Native providers
 
 Gofer includes direct Slack, Telegram, Discord, Feishu/Lark, DingTalk, WeCom,
-WeChat, and GitHub adapters. They implement the
+WeChat, GitHub, and Buzz/Nostr adapters. They implement the
 same `Sender` and inbound-source contracts as the generic webhook, so the
 manager owns startup, shutdown, queueing, authentication, deduplication, and
 conversation serialization uniformly. Socket providers authenticate before
@@ -232,13 +232,58 @@ or related commands during the run when a visible GitHub side effect is needed.
 This prevents an automatic final-message comment from duplicating an action the
 agent already performed.
 
+Buzz connects directly to a Nostr relay. Private keys may be 64-character hex or
+`nsec`; allowlisted member identities may be hex or `npub`. Every inbound event
+must have a self-consistent NIP-01 ID and valid BIP-340 signature before any
+authorization or channel-state decision. The allowlist is deliberately
+deny-by-default, unlike the other chat adapters: an empty `allowed_users` drops
+all chat events.
+
+```yaml
+channels:
+  enabled: true
+  bindings:
+    - user_id: local
+      provider: buzz
+      workspace_id: relay.example
+      external_user_id: <member-pubkey-hex>
+  buzz:
+    enabled: true
+    relay_url: wss://relay.example
+    private_key: ${BUZZ_PRIVATE_KEY}
+    relay_public_key: ${BUZZ_RELAY_PUBLIC_KEY}
+    allowed_users: [<member-npub-or-hex>]
+    require_mention: true
+    mention_free_channels: [<channel-uuid>]
+    request_timeout_seconds: 20
+    max_attempts: 3
+```
+
+The connector implements NIP-42 authentication, signed kind-9 chat events,
+kind-39000 channel discovery, and live kind-44100/44101 membership changes.
+Discovery opens one `#h`-scoped subscription per channel up to a fixed cap.
+Each accepted channel advances its own replay watermark only after queue
+acceptance; future-dated events cannot pin that cursor. `CLOSED` subscriptions
+are classified as transient or permanent and receive separate bounded retry
+budgets, while WebSocket failures reconnect with capped exponential backoff.
+
+`relay_public_key` is optional for compatibility but strongly recommended. When
+set, channel metadata and membership events must be signed by that key; chat
+events still authenticate their individual authors. DMs, configured
+mention-free channels, and an already engaged thread may bypass the bot-mention
+gate, while connector-authored events are ignored to prevent loops. Replies are
+signed kind-9 events, preserve thread roots, mention the requester on the first
+chunk, split at 60,000 UTF-8 bytes without breaking code points, and refuse
+known hidden-context wrappers as a final defense against immutable relay leaks.
+
 `allowed_users` and `allowed_guilds` are transport-level allowlists; an empty
-list allows the provider event to reach Gofer's binding resolver. An active
-binding is still required for the external user, so an allowlist never grants
-access to another Gofer account. Provider attachment references are normalized
-as untrusted manifests. This release does not download them or upload reply
-files; content crosses the workspace boundary only through Gofer's existing
-upload and document-ingestion APIs.
+list allows the provider event to reach Gofer's binding resolver, except for
+Buzz's explicit deny-by-default rule. An active binding is still required for
+the external user, so an allowlist never grants access to another Gofer account.
+Provider attachment references are normalized as untrusted manifests. This
+release does not download them or upload reply files; content crosses the
+workspace boundary only through Gofer's existing upload and document-ingestion
+APIs.
 
 ## Signed generic webhook
 

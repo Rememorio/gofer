@@ -269,6 +269,7 @@ type ChannelsConfig struct {
 	WeCom             ChannelWeComConfig     `yaml:"wecom" json:"wecom"`
 	WeChat            ChannelWeChatConfig    `yaml:"wechat" json:"wechat"`
 	GitHub            ChannelGitHubConfig    `yaml:"github" json:"github"`
+	Buzz              ChannelBuzzConfig      `yaml:"buzz" json:"buzz"`
 }
 
 // ChannelBindingConfig bootstraps one operator-approved external identity.
@@ -401,6 +402,19 @@ type ChannelGitHubTriggerConfig struct {
 	AllowAuthors   []string `yaml:"allow_authors" json:"allow_authors,omitempty"`
 }
 
+// ChannelBuzzConfig controls the signed Buzz/Nostr relay provider.
+type ChannelBuzzConfig struct {
+	Enabled               bool     `yaml:"enabled" json:"enabled"`
+	RelayURL              string   `yaml:"relay_url" json:"relay_url"`
+	PrivateKey            string   `yaml:"private_key" json:"-"`
+	RelayPublicKey        string   `yaml:"relay_public_key" json:"relay_public_key,omitempty"`
+	AllowedUsers          []string `yaml:"allowed_users" json:"allowed_users"`
+	RequireMention        bool     `yaml:"require_mention" json:"require_mention"`
+	MentionFreeChannels   []string `yaml:"mention_free_channels" json:"mention_free_channels"`
+	RequestTimeoutSeconds int      `yaml:"request_timeout_seconds" json:"request_timeout_seconds"`
+	MaxAttempts           int      `yaml:"max_attempts" json:"max_attempts"`
+}
+
 // TitleConfig controls automatic first-exchange conversation titles.
 type TitleConfig struct {
 	Enabled   bool   `yaml:"enabled" json:"enabled"`
@@ -521,6 +535,7 @@ func Defaults() Config {
 			WeCom:             ChannelWeComConfig{WorkingMessage: "Working on it...", HeartbeatSeconds: 30, RequestTimeoutSeconds: 20, MaxAttempts: 3},
 			WeChat:            ChannelWeChatConfig{ChannelVersion: "1.0", PollTimeoutSeconds: 35, RequestTimeoutSeconds: 45, MaxAttempts: 3},
 			GitHub:            ChannelGitHubConfig{MaxBodyBytes: 1 << 20},
+			Buzz:              ChannelBuzzConfig{RequireMention: true, RequestTimeoutSeconds: 20, MaxAttempts: 3},
 		},
 		Title: TitleConfig{Enabled: true, MaxWords: 6, MaxChars: 60},
 		Suggestions: SuggestionsConfig{
@@ -775,7 +790,10 @@ func validateNativeChannels(channels ChannelsConfig) error {
 	if err := validateWeChatChannel(channels.Enabled, channels.WeChat); err != nil {
 		return err
 	}
-	return validateGitHubChannel(channels.Enabled, channels.GitHub)
+	if err := validateGitHubChannel(channels.Enabled, channels.GitHub); err != nil {
+		return err
+	}
+	return validateBuzzChannel(channels.Enabled, channels.Buzz)
 }
 
 func validateSlackChannel(channelsEnabled bool, channel ChannelSlackConfig) error {
@@ -894,6 +912,51 @@ func validateGitHubChannel(channelsEnabled bool, github ChannelGitHubConfig) err
 		}
 	}
 	return nil
+}
+
+func validateBuzzChannel(channelsEnabled bool, buzz ChannelBuzzConfig) error {
+	if !buzz.Enabled {
+		return nil
+	}
+	parsed, err := url.Parse(strings.TrimSpace(buzz.RelayURL))
+	if !channelsEnabled || err != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" ||
+		parsed.Scheme != "ws" && parsed.Scheme != "wss" || !validNostrKeyText(buzz.PrivateKey, false) ||
+		!validNostrKeyText(buzz.RelayPublicKey, true) || !validNostrKeyList(buzz.AllowedUsers) ||
+		!validChannelIDs(buzz.MentionFreeChannels) || buzz.RequestTimeoutSeconds < 1 || buzz.RequestTimeoutSeconds > 120 ||
+		buzz.MaxAttempts < 1 || buzz.MaxAttempts > 5 {
+		return fmt.Errorf("%w: invalid Buzz channel configuration", ErrInvalid)
+	}
+	return nil
+}
+
+func validNostrKeyList(values []string) bool {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if !validNostrKeyText(value, false) {
+			return false
+		}
+		normalized := strings.ToLower(value)
+		if _, duplicate := seen[normalized]; duplicate {
+			return false
+		}
+		seen[normalized] = struct{}{}
+	}
+	return true
+}
+
+func validNostrKeyText(value string, allowEmpty bool) bool {
+	if value == "" {
+		return allowEmpty
+	}
+	if strings.TrimSpace(value) != value || len(value) < 32 || len(value) > 128 {
+		return false
+	}
+	for _, character := range value {
+		if character > 127 || character <= 32 {
+			return false
+		}
+	}
+	return true
 }
 
 func validateGitHubSubscription(subscription ChannelGitHubSubscription, seen map[string]struct{}) error {

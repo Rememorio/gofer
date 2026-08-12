@@ -250,6 +250,20 @@ channels:
     #         require_mention: true
     #         mention_login: gofer-bot
     #         allow_authors: [Rememorio]
+  # Buzz uses signed Nostr events over one relay WebSocket. The user allowlist
+  # denies by default; values may be 64-character hex keys or npub values.
+  buzz:
+    enabled: false
+    relay_url: ""
+    private_key: ""
+    # Optional but recommended: only this relay key may publish channel metadata
+    # and membership notifications.
+    relay_public_key: ""
+    allowed_users: []
+    require_mention: true
+    mention_free_channels: []
+    request_timeout_seconds: 20
+    max_attempts: 3
 
 # Empty conversations receive a bounded local title after their first user
 # turn. Set model_name to use a configured model alias instead; failures still

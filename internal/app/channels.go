@@ -110,6 +110,7 @@ func (service *Service) openNativeChannels(manager *channel.Manager) error {
 	openers := []func(*channel.Manager) error{
 		service.openSlackChannel, service.openTelegramChannel, service.openDiscordChannel,
 		service.openFeishuChannel, service.openDingTalkChannel, service.openWeComChannel, service.openWeChatChannel,
+		service.openBuzzChannel,
 	}
 	for _, open := range openers {
 		if err := open(manager); err != nil {
@@ -240,6 +241,20 @@ func (service *Service) openGitHubChannel(manager *channel.Manager) error {
 	}
 	service.githubWebhook = provider
 	return nil
+}
+
+func (service *Service) openBuzzChannel(manager *channel.Manager) error {
+	configured := service.config.Channels.Buzz
+	if !configured.Enabled {
+		return nil
+	}
+	provider, err := channel.NewBuzz(channel.BuzzConfig{
+		RelayURL: configured.RelayURL, PrivateKey: configured.PrivateKey, RelayPublicKey: configured.RelayPublicKey,
+		AllowedUsers: configured.AllowedUsers, RequireMention: configured.RequireMention,
+		MentionFreeChannels: configured.MentionFreeChannels,
+		RequestTimeout:      time.Duration(configured.RequestTimeoutSeconds) * time.Second, MaxAttempts: configured.MaxAttempts,
+	})
+	return registerNativeChannel(manager, provider, err)
 }
 
 func registerNativeChannel(manager *channel.Manager, provider channel.Sender, err error) error {
