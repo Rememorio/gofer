@@ -78,52 +78,88 @@ func (service *Service) openChannels() error {
 }
 
 func (service *Service) openNativeChannels(manager *channel.Manager) error {
-	configured := service.config.Channels
-	if configured.Slack.Enabled {
-		provider, err := channel.NewSlack(channel.SlackConfig{
-			BotToken: configured.Slack.BotToken, AppToken: configured.Slack.AppToken,
-			BotUserID: configured.Slack.BotUserID, AllowedUsers: configured.Slack.AllowedUsers,
-			RequestTimeout: time.Duration(configured.Slack.RequestTimeoutSeconds) * time.Second,
-			MaxAttempts:    configured.Slack.MaxAttempts,
-		})
-		if err != nil {
-			return err
-		}
-		if err = manager.Register(provider); err != nil {
-			_ = provider.Close()
+	openers := []func(*channel.Manager) error{
+		service.openSlackChannel, service.openTelegramChannel, service.openDiscordChannel,
+		service.openFeishuChannel, service.openDingTalkChannel,
+	}
+	for _, open := range openers {
+		if err := open(manager); err != nil {
 			return err
 		}
 	}
-	if configured.Telegram.Enabled {
-		provider, err := channel.NewTelegram(channel.TelegramConfig{
-			BotToken: configured.Telegram.BotToken, AllowedUsers: configured.Telegram.AllowedUsers,
-			PollTimeout:    time.Duration(configured.Telegram.PollTimeoutSeconds) * time.Second,
-			RequestTimeout: time.Duration(configured.Telegram.RequestTimeoutSeconds) * time.Second,
-			MaxAttempts:    configured.Telegram.MaxAttempts,
-		})
-		if err != nil {
-			return err
-		}
-		if err = manager.Register(provider); err != nil {
-			_ = provider.Close()
-			return err
-		}
+	return nil
+}
+
+func (service *Service) openSlackChannel(manager *channel.Manager) error {
+	configured := service.config.Channels.Slack
+	if !configured.Enabled {
+		return nil
 	}
-	if configured.Discord.Enabled {
-		provider, err := channel.NewDiscord(channel.DiscordConfig{
-			BotToken: configured.Discord.BotToken, AllowedGuilds: configured.Discord.AllowedGuilds,
-			AllowedChannels: configured.Discord.AllowedChannels, MentionOnly: configured.Discord.MentionOnly,
-			ThreadMode:     configured.Discord.ThreadMode,
-			RequestTimeout: time.Duration(configured.Discord.RequestTimeoutSeconds) * time.Second,
-			MaxAttempts:    configured.Discord.MaxAttempts,
-		})
-		if err != nil {
-			return err
-		}
-		if err = manager.Register(provider); err != nil {
-			_ = provider.Close()
-			return err
-		}
+	provider, err := channel.NewSlack(channel.SlackConfig{
+		BotToken: configured.BotToken, AppToken: configured.AppToken,
+		BotUserID: configured.BotUserID, AllowedUsers: configured.AllowedUsers,
+		RequestTimeout: time.Duration(configured.RequestTimeoutSeconds) * time.Second, MaxAttempts: configured.MaxAttempts,
+	})
+	return registerNativeChannel(manager, provider, err)
+}
+
+func (service *Service) openTelegramChannel(manager *channel.Manager) error {
+	configured := service.config.Channels.Telegram
+	if !configured.Enabled {
+		return nil
+	}
+	provider, err := channel.NewTelegram(channel.TelegramConfig{
+		BotToken: configured.BotToken, AllowedUsers: configured.AllowedUsers,
+		PollTimeout:    time.Duration(configured.PollTimeoutSeconds) * time.Second,
+		RequestTimeout: time.Duration(configured.RequestTimeoutSeconds) * time.Second, MaxAttempts: configured.MaxAttempts,
+	})
+	return registerNativeChannel(manager, provider, err)
+}
+
+func (service *Service) openDiscordChannel(manager *channel.Manager) error {
+	configured := service.config.Channels.Discord
+	if !configured.Enabled {
+		return nil
+	}
+	provider, err := channel.NewDiscord(channel.DiscordConfig{
+		BotToken: configured.BotToken, AllowedGuilds: configured.AllowedGuilds,
+		AllowedChannels: configured.AllowedChannels, MentionOnly: configured.MentionOnly, ThreadMode: configured.ThreadMode,
+		RequestTimeout: time.Duration(configured.RequestTimeoutSeconds) * time.Second, MaxAttempts: configured.MaxAttempts,
+	})
+	return registerNativeChannel(manager, provider, err)
+}
+
+func (service *Service) openFeishuChannel(manager *channel.Manager) error {
+	configured := service.config.Channels.Feishu
+	if !configured.Enabled {
+		return nil
+	}
+	provider, err := channel.NewFeishu(channel.FeishuConfig{
+		AppID: configured.AppID, AppSecret: configured.AppSecret, Domain: configured.Domain, AllowedUsers: configured.AllowedUsers,
+		RequestTimeout: time.Duration(configured.RequestTimeoutSeconds) * time.Second, MaxAttempts: configured.MaxAttempts,
+	})
+	return registerNativeChannel(manager, provider, err)
+}
+
+func (service *Service) openDingTalkChannel(manager *channel.Manager) error {
+	configured := service.config.Channels.DingTalk
+	if !configured.Enabled {
+		return nil
+	}
+	provider, err := channel.NewDingTalk(channel.DingTalkConfig{
+		ClientID: configured.ClientID, ClientSecret: configured.ClientSecret, AllowedUsers: configured.AllowedUsers,
+		RequestTimeout: time.Duration(configured.RequestTimeoutSeconds) * time.Second, MaxAttempts: configured.MaxAttempts,
+	})
+	return registerNativeChannel(manager, provider, err)
+}
+
+func registerNativeChannel(manager *channel.Manager, provider channel.Sender, err error) error {
+	if err != nil {
+		return err
+	}
+	if err = manager.Register(provider); err != nil {
+		_ = provider.Close()
+		return err
 	}
 	return nil
 }

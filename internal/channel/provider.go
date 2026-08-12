@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf16"
 )
@@ -89,6 +90,14 @@ func retryProvider(ctx context.Context, attempts int, sleep func(context.Context
 }
 
 func requestJSON(ctx context.Context, client *http.Client, method, endpoint, authorization string, input, output any) error {
+	headers := make(http.Header)
+	if authorization != "" {
+		headers.Set("Authorization", authorization)
+	}
+	return requestJSONHeaders(ctx, client, method, endpoint, headers, input, output)
+}
+
+func requestJSONHeaders(ctx context.Context, client *http.Client, method, endpoint string, headers http.Header, input, output any) error {
 	var body io.Reader
 	if input != nil {
 		encoded, err := json.Marshal(input)
@@ -104,8 +113,10 @@ func requestJSON(ctx context.Context, client *http.Client, method, endpoint, aut
 	if input != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	if authorization != "" {
-		request.Header.Set("Authorization", authorization)
+	for name, values := range headers {
+		for _, value := range values {
+			request.Header.Add(name, value)
+		}
 	}
 	response, err := client.Do(request)
 	if err != nil {
@@ -231,6 +242,81 @@ func validProviderAttempts(attempts int) bool { return attempts >= 1 && attempts
 func trustedProviderHost(host, domain string) bool {
 	host, domain = strings.ToLower(strings.TrimSpace(host)), strings.ToLower(strings.TrimSpace(domain))
 	return host == domain || strings.HasSuffix(host, "."+domain)
+}
+
+type routeEntry[T any] struct {
+	value     T
+	createdAt time.Time
+}
+
+type routeStore[T any] struct {
+	mu      sync.Mutex
+	entries map[string]routeEntry[T]
+	limit   int
+	ttl     time.Duration
+	now     func() time.Time
+}
+
+func newRouteStore[T any](limit int, ttl time.Duration, now func() time.Time) *routeStore[T] {
+	if now == nil {
+		now = time.Now
+	}
+	return &routeStore[T]{entries: make(map[string]routeEntry[T]), limit: limit, ttl: ttl, now: now}
+}
+
+func (store *routeStore[T]) Put(key string, value T) {
+	if store == nil || key == "" {
+		return
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	now := store.now()
+	store.prune(now)
+	if len(store.entries) >= store.limit {
+		store.deleteOldest()
+	}
+	store.entries[key] = routeEntry[T]{value: value, createdAt: now}
+}
+
+func (store *routeStore[T]) Get(key string) (T, bool) {
+	var zero T
+	if store == nil || key == "" {
+		return zero, false
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	now := store.now()
+	store.prune(now)
+	entry, exists := store.entries[key]
+	return entry.value, exists
+}
+
+func (store *routeStore[T]) Delete(key string) {
+	if store == nil {
+		return
+	}
+	store.mu.Lock()
+	delete(store.entries, key)
+	store.mu.Unlock()
+}
+
+func (store *routeStore[T]) prune(now time.Time) {
+	for key, entry := range store.entries {
+		if now.Sub(entry.createdAt) >= store.ttl {
+			delete(store.entries, key)
+		}
+	}
+}
+
+func (store *routeStore[T]) deleteOldest() {
+	oldestKey := ""
+	var oldest time.Time
+	for key, entry := range store.entries {
+		if oldestKey == "" || entry.createdAt.Before(oldest) {
+			oldestKey, oldest = key, entry.createdAt
+		}
+	}
+	delete(store.entries, oldestKey)
 }
 
 func normalizedSet(values []string) map[string]struct{} {

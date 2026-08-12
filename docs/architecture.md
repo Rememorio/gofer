@@ -71,7 +71,7 @@ Planned package groups:
 | `internal/store` | Core durable store contract and in-memory reference adapter |
 | `internal/store/sqlstore` | Transactional SQLite and PostgreSQL persistence |
 | `internal/gateway` | DeerFlow-compatible REST and SSE transports |
-| `internal/channel` | Durable channel identities, conversation mapping, dedupe, bounded dispatch, signed webhooks, and native Slack, Telegram, and Discord adapters |
+| `internal/channel` | Durable channel identities, conversation mapping, dedupe, bounded dispatch, signed webhooks, and native Slack, Telegram, Discord, Feishu/Lark, and DingTalk adapters |
 | `internal/auth` | Bearer authentication, principal context, and RBAC policy |
 | `internal/scheduler` | Cron/one-shot validation, durable leases, and dispatch |
 | `internal/extension` | Dependency-ordered component lifecycle and rollback |

@@ -263,6 +263,8 @@ type ChannelsConfig struct {
 	Slack             ChannelSlackConfig     `yaml:"slack" json:"slack"`
 	Telegram          ChannelTelegramConfig  `yaml:"telegram" json:"telegram"`
 	Discord           ChannelDiscordConfig   `yaml:"discord" json:"discord"`
+	Feishu            ChannelFeishuConfig    `yaml:"feishu" json:"feishu"`
+	DingTalk          ChannelDingTalkConfig  `yaml:"dingtalk" json:"dingtalk"`
 }
 
 // ChannelBindingConfig bootstraps one operator-approved external identity.
@@ -316,6 +318,27 @@ type ChannelDiscordConfig struct {
 	AllowedChannels       []string `yaml:"allowed_channels" json:"allowed_channels"`
 	MentionOnly           bool     `yaml:"mention_only" json:"mention_only"`
 	ThreadMode            bool     `yaml:"thread_mode" json:"thread_mode"`
+	RequestTimeoutSeconds int      `yaml:"request_timeout_seconds" json:"request_timeout_seconds"`
+	MaxAttempts           int      `yaml:"max_attempts" json:"max_attempts"`
+}
+
+// ChannelFeishuConfig controls the Feishu/Lark long-connection provider.
+type ChannelFeishuConfig struct {
+	Enabled               bool     `yaml:"enabled" json:"enabled"`
+	AppID                 string   `yaml:"app_id" json:"app_id"`
+	AppSecret             string   `yaml:"app_secret" json:"-"`
+	Domain                string   `yaml:"domain" json:"domain,omitempty"`
+	AllowedUsers          []string `yaml:"allowed_users" json:"allowed_users"`
+	RequestTimeoutSeconds int      `yaml:"request_timeout_seconds" json:"request_timeout_seconds"`
+	MaxAttempts           int      `yaml:"max_attempts" json:"max_attempts"`
+}
+
+// ChannelDingTalkConfig controls the DingTalk Stream Mode provider.
+type ChannelDingTalkConfig struct {
+	Enabled               bool     `yaml:"enabled" json:"enabled"`
+	ClientID              string   `yaml:"client_id" json:"client_id"`
+	ClientSecret          string   `yaml:"client_secret" json:"-"`
+	AllowedUsers          []string `yaml:"allowed_users" json:"allowed_users"`
 	RequestTimeoutSeconds int      `yaml:"request_timeout_seconds" json:"request_timeout_seconds"`
 	MaxAttempts           int      `yaml:"max_attempts" json:"max_attempts"`
 }
@@ -435,6 +458,8 @@ func Defaults() Config {
 			Slack:             ChannelSlackConfig{RequestTimeoutSeconds: 20, MaxAttempts: 3},
 			Telegram:          ChannelTelegramConfig{PollTimeoutSeconds: 30, RequestTimeoutSeconds: 45, MaxAttempts: 3},
 			Discord:           ChannelDiscordConfig{RequestTimeoutSeconds: 20, MaxAttempts: 3},
+			Feishu:            ChannelFeishuConfig{Domain: "https://open.feishu.cn", RequestTimeoutSeconds: 20, MaxAttempts: 3},
+			DingTalk:          ChannelDingTalkConfig{RequestTimeoutSeconds: 30, MaxAttempts: 3},
 		},
 		Title: TitleConfig{Enabled: true, MaxWords: 6, MaxChars: 60},
 		Suggestions: SuggestionsConfig{
@@ -671,7 +696,13 @@ func validateNativeChannels(channels ChannelsConfig) error {
 	if err := validateTelegramChannel(channels.Enabled, channels.Telegram); err != nil {
 		return err
 	}
-	return validateDiscordChannel(channels.Enabled, channels.Discord)
+	if err := validateDiscordChannel(channels.Enabled, channels.Discord); err != nil {
+		return err
+	}
+	if err := validateFeishuChannel(channels.Enabled, channels.Feishu); err != nil {
+		return err
+	}
+	return validateDingTalkChannel(channels.Enabled, channels.DingTalk)
 }
 
 func validateSlackChannel(channelsEnabled bool, channel ChannelSlackConfig) error {
@@ -705,6 +736,31 @@ func validateDiscordChannel(channelsEnabled bool, channel ChannelDiscordConfig) 
 	if !channelsEnabled || strings.TrimSpace(channel.BotToken) == "" || channel.RequestTimeoutSeconds < 1 || channel.RequestTimeoutSeconds > 120 ||
 		channel.MaxAttempts < 1 || channel.MaxAttempts > 5 || !validChannelIDs(channel.AllowedGuilds) || !validChannelIDs(channel.AllowedChannels) {
 		return fmt.Errorf("%w: invalid Discord channel configuration", ErrInvalid)
+	}
+	return nil
+}
+
+func validateFeishuChannel(channelsEnabled bool, channel ChannelFeishuConfig) error {
+	if !channel.Enabled {
+		return nil
+	}
+	if !channelsEnabled || strings.TrimSpace(channel.AppID) == "" || strings.TrimSpace(channel.AppSecret) == "" ||
+		channel.Domain != "https://open.feishu.cn" && channel.Domain != "https://open.larksuite.com" ||
+		channel.RequestTimeoutSeconds < 1 || channel.RequestTimeoutSeconds > 120 || channel.MaxAttempts < 1 || channel.MaxAttempts > 5 ||
+		!validChannelIDs(channel.AllowedUsers) {
+		return fmt.Errorf("%w: invalid Feishu channel configuration", ErrInvalid)
+	}
+	return nil
+}
+
+func validateDingTalkChannel(channelsEnabled bool, channel ChannelDingTalkConfig) error {
+	if !channel.Enabled {
+		return nil
+	}
+	if !channelsEnabled || strings.TrimSpace(channel.ClientID) == "" || strings.TrimSpace(channel.ClientSecret) == "" ||
+		channel.RequestTimeoutSeconds < 1 || channel.RequestTimeoutSeconds > 120 || channel.MaxAttempts < 1 || channel.MaxAttempts > 5 ||
+		!validChannelIDs(channel.AllowedUsers) {
+		return fmt.Errorf("%w: invalid DingTalk channel configuration", ErrInvalid)
 	}
 	return nil
 }

@@ -176,6 +176,37 @@ func TestProviderHelpersBoundAndSplit(t *testing.T) {
 	}
 }
 
+func TestRouteStoreBoundsAndExpires(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(100, 0)
+	store := newRouteStore[string](2, time.Minute, func() time.Time { return now })
+	store.Put("first", "one")
+	now = now.Add(time.Second)
+	store.Put("second", "two")
+	now = now.Add(time.Second)
+	store.Put("third", "three")
+	if _, exists := store.Get("first"); exists {
+		t.Fatal("oldest route was not evicted")
+	}
+	if value, exists := store.Get("third"); !exists || value != "three" {
+		t.Fatalf("third = %q, %v", value, exists)
+	}
+	store.Delete("second")
+	if _, exists := store.Get("second"); exists {
+		t.Fatal("deleted route remains")
+	}
+	now = now.Add(time.Minute)
+	if _, exists := store.Get("third"); exists {
+		t.Fatal("expired route remains")
+	}
+	var nilStore *routeStore[string]
+	nilStore.Put("ignored", "value")
+	nilStore.Delete("ignored")
+	if _, exists := nilStore.Get("ignored"); exists {
+		t.Fatal("nil route store returned a value")
+	}
+}
+
 type sourceSender struct {
 	fakeSender
 	startErr error

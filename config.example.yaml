@@ -187,6 +187,24 @@ channels:
     thread_mode: false
     request_timeout_seconds: 20
     max_attempts: 3
+  # Feishu and Lark use the official SDK long connection. Use the Lark domain
+  # only for international Lark tenants.
+  feishu:
+    enabled: false
+    app_id: ""
+    app_secret: ""
+    domain: https://open.feishu.cn
+    allowed_users: []
+    request_timeout_seconds: 20
+    max_attempts: 3
+  # DingTalk Stream Mode receives events without a public callback URL.
+  dingtalk:
+    enabled: false
+    client_id: ""
+    client_secret: ""
+    allowed_users: []
+    request_timeout_seconds: 30
+    max_attempts: 3
 
 # Empty conversations receive a bounded local title after their first user
 # turn. Set model_name to use a configured model alias instead; failures still

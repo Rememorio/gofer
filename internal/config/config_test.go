@@ -329,6 +329,22 @@ func TestValidateRejectsInvalidConfigurations(t *testing.T) {
 			config.Channels.Enabled = true
 			config.Channels.Discord = ChannelDiscordConfig{Enabled: true, BotToken: "bot", AllowedGuilds: []string{""}, RequestTimeoutSeconds: 10, MaxAttempts: 1}
 		}},
+		{name: "channel Feishu domain", mutate: func(config *Config) {
+			config.Channels.Enabled = true
+			config.Channels.Feishu = ChannelFeishuConfig{Enabled: true, AppID: "app", AppSecret: "secret", Domain: "https://example.com", RequestTimeoutSeconds: 10, MaxAttempts: 1}
+		}},
+		{name: "channel Feishu users", mutate: func(config *Config) {
+			config.Channels.Enabled = true
+			config.Channels.Feishu = ChannelFeishuConfig{Enabled: true, AppID: "app", AppSecret: "secret", Domain: "https://open.feishu.cn", AllowedUsers: []string{"same", "same"}, RequestTimeoutSeconds: 10, MaxAttempts: 1}
+		}},
+		{name: "channel DingTalk credentials", mutate: func(config *Config) {
+			config.Channels.Enabled = true
+			config.Channels.DingTalk = ChannelDingTalkConfig{Enabled: true, ClientID: "client", RequestTimeoutSeconds: 10, MaxAttempts: 1}
+		}},
+		{name: "channel DingTalk attempts", mutate: func(config *Config) {
+			config.Channels.Enabled = true
+			config.Channels.DingTalk = ChannelDingTalkConfig{Enabled: true, ClientID: "client", ClientSecret: "secret", RequestTimeoutSeconds: 10, MaxAttempts: 6}
+		}},
 		{name: "channel binding provider", mutate: func(config *Config) {
 			config.Channels.Bindings = []ChannelBindingConfig{{UserID: "u", Provider: "Webhook", ExternalUserID: "external"}}
 		}},
@@ -386,6 +402,8 @@ func TestNativeChannelConfigurationsValidate(t *testing.T) {
 	config.Channels.Slack = ChannelSlackConfig{Enabled: true, BotToken: "bot", AppToken: "app", AllowedUsers: []string{"U1"}, RequestTimeoutSeconds: 20, MaxAttempts: 3}
 	config.Channels.Telegram = ChannelTelegramConfig{Enabled: true, BotToken: "bot", AllowedUsers: []string{"1"}, PollTimeoutSeconds: 30, RequestTimeoutSeconds: 45, MaxAttempts: 3}
 	config.Channels.Discord = ChannelDiscordConfig{Enabled: true, BotToken: "bot", AllowedGuilds: []string{"G1"}, AllowedChannels: []string{"C1"}, RequestTimeoutSeconds: 20, MaxAttempts: 3}
+	config.Channels.Feishu = ChannelFeishuConfig{Enabled: true, AppID: "app", AppSecret: "secret", Domain: "https://open.larksuite.com", AllowedUsers: []string{"OU1"}, RequestTimeoutSeconds: 20, MaxAttempts: 3}
+	config.Channels.DingTalk = ChannelDingTalkConfig{Enabled: true, ClientID: "client", ClientSecret: "secret", AllowedUsers: []string{"staff1"}, RequestTimeoutSeconds: 30, MaxAttempts: 3}
 	if err := config.Validate(); err != nil {
 		t.Fatalf("Validate = %v", err)
 	}

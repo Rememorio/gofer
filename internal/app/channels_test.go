@@ -42,6 +42,8 @@ func TestOpenNativeChannelsRegistersConfiguredProviders(t *testing.T) {
 	cfg.Channels.Slack = config.ChannelSlackConfig{Enabled: true, BotToken: "bot", AppToken: "app", RequestTimeoutSeconds: 20, MaxAttempts: 3}
 	cfg.Channels.Telegram = config.ChannelTelegramConfig{Enabled: true, BotToken: "bot", PollTimeoutSeconds: 30, RequestTimeoutSeconds: 45, MaxAttempts: 3}
 	cfg.Channels.Discord = config.ChannelDiscordConfig{Enabled: true, BotToken: "bot", RequestTimeoutSeconds: 20, MaxAttempts: 3}
+	cfg.Channels.Feishu = config.ChannelFeishuConfig{Enabled: true, AppID: "app", AppSecret: "secret", Domain: "https://open.feishu.cn", RequestTimeoutSeconds: 20, MaxAttempts: 3}
+	cfg.Channels.DingTalk = config.ChannelDingTalkConfig{Enabled: true, ClientID: "client", ClientSecret: "secret", RequestTimeoutSeconds: 30, MaxAttempts: 3}
 	state := channel.NewMemoryState()
 	manager, err := channel.NewManager(channel.Config{
 		Resolver: state, Dispatcher: appChannelDispatcherFunc(func(context.Context, channel.Request) (channel.Reply, error) { return channel.Reply{}, nil }),
@@ -54,7 +56,7 @@ func TestOpenNativeChannelsRegistersConfiguredProviders(t *testing.T) {
 	if err = service.openNativeChannels(manager); err != nil {
 		t.Fatal(err)
 	}
-	if providers := manager.Providers(); fmt.Sprint(providers) != "[discord slack telegram]" {
+	if providers := manager.Providers(); fmt.Sprint(providers) != "[dingtalk discord feishu slack telegram]" {
 		t.Fatalf("providers = %v", providers)
 	}
 	if err = manager.Close(); err != nil {

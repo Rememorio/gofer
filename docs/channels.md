@@ -34,7 +34,8 @@ The manager also provides two separate concurrency controls:
 
 ## Native providers
 
-Gofer includes direct Slack, Telegram, and Discord adapters. They implement the
+Gofer includes direct Slack, Telegram, Discord, Feishu/Lark, and DingTalk
+adapters. They implement the
 same `Sender` and inbound-source contracts as the generic webhook, so the
 manager owns startup, shutdown, queueing, authentication, deduplication, and
 conversation serialization uniformly. A provider is fully connected before
@@ -96,6 +97,44 @@ channels:
     mention_only: true
     thread_mode: true
     request_timeout_seconds: 20
+    max_attempts: 3
+```
+
+Feishu and international Lark tenants use the official SDK long connection, so
+no public callback URL is required. Events are accepted only after the SDK
+reports that the connection is ready. Group messages keep their root or thread
+identifier; direct messages use one conversation. Replies use idempotency keys
+and are split at the platform's UTF-16 text limit. Set `domain` to
+`https://open.larksuite.com` only for an international Lark tenant.
+
+```yaml
+channels:
+  enabled: true
+  feishu:
+    enabled: true
+    app_id: ${FEISHU_APP_ID}
+    app_secret: ${FEISHU_APP_SECRET}
+    domain: https://open.feishu.cn
+    allowed_users: [ou_example]
+    request_timeout_seconds: 20
+    max_attempts: 3
+```
+
+DingTalk uses Stream Mode for inbound events and OpenAPI for outbound Markdown
+messages. Gofer retains only a bounded, expiring reply route for each accepted
+message, refreshes access tokens before expiry, and retries once a stale token
+has been invalidated. Direct messages route to the sender; group messages route
+to their open conversation ID.
+
+```yaml
+channels:
+  enabled: true
+  dingtalk:
+    enabled: true
+    client_id: ${DINGTALK_CLIENT_ID}
+    client_secret: ${DINGTALK_CLIENT_SECRET}
+    allowed_users: [manager123]
+    request_timeout_seconds: 30
     max_attempts: 3
 ```
 
