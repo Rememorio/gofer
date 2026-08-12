@@ -82,13 +82,21 @@ type RunCanceller interface {
 	Cancel(context.Context, domain.RunID) error
 }
 
+// ThreadCleaner removes thread-scoped resources outside the durable store.
+type ThreadCleaner interface {
+	PrepareThreadDelete(context.Context, domain.ThreadID) error
+	CleanupThread(context.Context, domain.ThreadID, string) error
+}
+
 // Config supplies durable adapters and transport policy.
 type Config struct {
-	Store     store.Store
-	Starter   RunStarter
-	Canceller RunCanceller
-	Now       func() time.Time
-	KeepAlive time.Duration
+	Store         store.Store
+	Starter       RunStarter
+	Canceller     RunCanceller
+	Cleaner       ThreadCleaner
+	OwnerResolver func(context.Context) string
+	Now           func() time.Time
+	KeepAlive     time.Duration
 }
 
 // Handler is Gofer's standard-library HTTP gateway.
@@ -96,6 +104,8 @@ type Handler struct {
 	store     store.Store
 	starter   RunStarter
 	canceller RunCanceller
+	cleaner   ThreadCleaner
+	owner     func(context.Context) string
 	now       func() time.Time
 	keepAlive time.Duration
 	mux       *http.ServeMux
@@ -109,13 +119,16 @@ func New(config Config) (*Handler, error) {
 	if config.Now == nil {
 		config.Now = time.Now
 	}
+	if config.OwnerResolver == nil {
+		config.OwnerResolver = func(context.Context) string { return "local" }
+	}
 	if config.KeepAlive == 0 {
 		config.KeepAlive = 15 * time.Second
 	}
 	if config.KeepAlive < 0 {
 		return nil, fmt.Errorf("%w: keepalive must be positive", ErrInvalidConfig)
 	}
-	handler := &Handler{store: config.Store, starter: config.Starter, canceller: config.Canceller, now: config.Now, keepAlive: config.KeepAlive, mux: http.NewServeMux()}
+	handler := &Handler{store: config.Store, starter: config.Starter, canceller: config.Canceller, cleaner: config.Cleaner, owner: config.OwnerResolver, now: config.Now, keepAlive: config.KeepAlive, mux: http.NewServeMux()}
 	handler.routes()
 	return handler, nil
 }
@@ -131,6 +144,7 @@ func (handler *Handler) routes() {
 	})
 	handler.mux.HandleFunc("POST /api/threads", handler.createThread)
 	handler.mux.HandleFunc("GET /api/threads/{thread_id}", handler.getThread)
+	handler.threadRoutes()
 	handler.mux.HandleFunc("POST /api/threads/{thread_id}/runs", handler.createRun)
 	handler.mux.HandleFunc("GET /api/threads/{thread_id}/runs/{run_id}", handler.getRun)
 	handler.mux.HandleFunc("POST /api/threads/{thread_id}/runs/{run_id}/cancel", handler.cancelRun)
@@ -154,7 +168,7 @@ func (handler *Handler) createThread(writer http.ResponseWriter, request *http.R
 			writeError(writer, parseErr)
 			return
 		}
-		if existing, lookupErr := handler.store.Thread(request.Context(), id); lookupErr == nil {
+		if existing, lookupErr := handler.ownedThread(request.Context(), id); lookupErr == nil {
 			writeJSON(writer, http.StatusOK, makeThreadResponse(existing))
 			return
 		} else if !errors.Is(lookupErr, store.ErrNotFound) {
@@ -168,7 +182,11 @@ func (handler *Handler) createThread(writer http.ResponseWriter, request *http.R
 			thread.ID = domain.ThreadID(input.ThreadID)
 		}
 		thread.Title = strings.TrimSpace(input.Title)
-		thread.Metadata = input.Metadata
+		thread.Metadata = cloneMetadata(input.Metadata)
+		if thread.Metadata == nil {
+			thread.Metadata = make(map[string]string)
+		}
+		thread.Metadata[store.OwnerMetadataKey] = handler.ownerID(request.Context())
 		if input.AssistantID != "" {
 			if thread.Metadata == nil {
 				thread.Metadata = make(map[string]string)
@@ -188,7 +206,7 @@ func (handler *Handler) getThread(writer http.ResponseWriter, request *http.Requ
 	id, err := domain.ParseThreadID(request.PathValue("thread_id"))
 	if err == nil {
 		var thread domain.Thread
-		thread, err = handler.store.Thread(request.Context(), id)
+		thread, err = handler.ownedThread(request.Context(), id)
 		if err == nil {
 			writeJSON(writer, http.StatusOK, makeThreadResponse(thread))
 			return
@@ -200,6 +218,10 @@ func (handler *Handler) getThread(writer http.ResponseWriter, request *http.Requ
 func (handler *Handler) createRun(writer http.ResponseWriter, request *http.Request) {
 	threadID, err := domain.ParseThreadID(request.PathValue("thread_id"))
 	if err != nil {
+		writeError(writer, err)
+		return
+	}
+	if _, err = handler.ownedThread(request.Context(), threadID); err != nil {
 		writeError(writer, err)
 		return
 	}
@@ -362,6 +384,9 @@ func (handler *Handler) scopedRun(request *http.Request) (domain.Run, error) {
 	if err != nil {
 		return domain.Run{}, err
 	}
+	if _, err = handler.ownedThread(request.Context(), threadID); err != nil {
+		return domain.Run{}, err
+	}
 	runID, err := domain.ParseRunID(request.PathValue("run_id"))
 	if err != nil {
 		return domain.Run{}, err
@@ -422,7 +447,7 @@ func validateRunRequest(request RunRequest) error {
 
 func makeThreadResponse(thread domain.Thread) threadResponse {
 	return threadResponse{ThreadID: thread.ID, Title: thread.Title, Status: "idle", CreatedAt: thread.CreatedAt,
-		UpdatedAt: thread.UpdatedAt, Metadata: thread.Metadata, Values: map[string]any{}, Interrupts: map[string]any{}}
+		UpdatedAt: thread.UpdatedAt, Metadata: publicMetadata(thread.Metadata), Values: map[string]any{}, Interrupts: map[string]any{}}
 }
 
 func makeRunResponse(run domain.Run) runResponse {
@@ -467,7 +492,7 @@ func writeError(writer http.ResponseWriter, err error) {
 		status = http.StatusNotFound
 	} else if errors.Is(err, store.ErrConflict) || errors.Is(err, store.ErrExists) {
 		status = http.StatusConflict
-	} else if errors.Is(err, domain.ErrInvalidID) || errors.Is(err, domain.ErrInvalidRun) || errors.Is(err, domain.ErrInvalidThread) || strings.Contains(err.Error(), "invalid ") {
+	} else if errors.Is(err, store.ErrInvalidQuery) || errors.Is(err, domain.ErrInvalidID) || errors.Is(err, domain.ErrInvalidRun) || errors.Is(err, domain.ErrInvalidThread) || strings.Contains(err.Error(), "invalid ") {
 		status = http.StatusBadRequest
 	}
 	writeJSON(writer, status, map[string]string{"error": http.StatusText(status)})

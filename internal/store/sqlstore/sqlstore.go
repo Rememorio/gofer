@@ -130,16 +130,7 @@ func (database *SQL) CreateThread(ctx context.Context, thread domain.Thread) err
 // Thread returns one isolated durable thread.
 func (database *SQL) Thread(ctx context.Context, id domain.ThreadID) (domain.Thread, error) {
 	row := database.db.QueryRowContext(ctx, database.bind(`SELECT id,title,metadata,created_at,updated_at FROM gofer_threads WHERE id=?`), id)
-	var thread domain.Thread
-	var metadata, created, updated string
-	if err := row.Scan(&thread.ID, &thread.Title, &metadata, &created, &updated); err != nil {
-		return domain.Thread{}, classifyNotFound("thread", err)
-	}
-	if err := json.Unmarshal([]byte(metadata), &thread.Metadata); err != nil {
-		return domain.Thread{}, err
-	}
-	thread.CreatedAt, thread.UpdatedAt = parseTime(created), parseTime(updated)
-	return thread, thread.Validate()
+	return scanThread(row)
 }
 
 // CreateRun persists a validated run after its parent thread exists.
@@ -202,7 +193,7 @@ func (database *SQL) TransitionRun(ctx context.Context, id domain.RunID, expecte
 	return advanced, nil
 }
 
-func scanRunRow(row *sql.Row) (domain.Run, error) {
+func scanRunRow(row interface{ Scan(...any) error }) (domain.Run, error) {
 	var run domain.Run
 	var created, started, finished string
 	if err := row.Scan(&run.ID, &run.ThreadID, &run.Status, &run.Attempt, &run.Error, &created, &started, &finished); err != nil {
@@ -375,6 +366,9 @@ func classifyInsert(kind string, err error) error {
 	return err
 }
 func classifyConflict(err error) error {
+	if err == nil {
+		return nil
+	}
 	lower := strings.ToLower(err.Error())
 	if strings.Contains(lower, "unique") || strings.Contains(lower, "duplicate") || strings.Contains(lower, "serialize") {
 		return store.ErrConflict

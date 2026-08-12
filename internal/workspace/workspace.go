@@ -225,6 +225,17 @@ func (manager *Manager) Open(threadID domain.ThreadID) (*Thread, error) {
 	}, nil
 }
 
+// Remove deletes one validated thread workspace tree.
+func (manager *Manager) Remove(threadID domain.ThreadID) error {
+	if manager == nil {
+		return fmt.Errorf("%w: manager is nil", ErrInvalidConfig)
+	}
+	if _, err := domain.ParseThreadID(string(threadID)); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidConfig, err)
+	}
+	return os.RemoveAll(filepath.Join(manager.root, "threads", string(threadID)))
+}
+
 // ID returns the owning thread identifier.
 func (workspace *Thread) ID() domain.ThreadID { return workspace.id }
 

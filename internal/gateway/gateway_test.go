@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Rememorio/gofer/internal/conversation"
 	"github.com/Rememorio/gofer/internal/domain"
 	"github.com/Rememorio/gofer/internal/event"
 	"github.com/Rememorio/gofer/internal/store"
@@ -22,6 +23,21 @@ type lifecycle struct {
 	started   []StartRequest
 	cancelled []domain.RunID
 	err       error
+}
+
+type cleanupRecorder struct {
+	threadID   domain.ThreadID
+	ownerID    string
+	prepareErr error
+}
+
+func (cleaner *cleanupRecorder) PrepareThreadDelete(context.Context, domain.ThreadID) error {
+	return cleaner.prepareErr
+}
+
+func (cleaner *cleanupRecorder) CleanupThread(_ context.Context, threadID domain.ThreadID, ownerID string) error {
+	cleaner.threadID, cleaner.ownerID = threadID, ownerID
+	return nil
 }
 
 func (lifecycle *lifecycle) Start(_ context.Context, request StartRequest) error {
@@ -284,6 +300,159 @@ func TestCompatibilityResponsesAndIdempotentThreadCreate(t *testing.T) {
 		if response.Status != test.want || response.UpdatedAt != run.FinishedAt {
 			t.Fatalf("response=%#v", response)
 		}
+	}
+}
+
+func TestThreadManagementAndOwnerIsolation(t *testing.T) {
+	t.Parallel()
+	memory := store.NewMemory()
+	alice, _ := New(Config{Store: memory, OwnerResolver: func(context.Context) string { return "alice" }})
+	bob, _ := New(Config{Store: memory, OwnerResolver: func(context.Context) string { return "bob" }})
+	created := perform(t, alice, http.MethodPost, "/api/threads", `{"title":"Project Alpha","metadata":{"team":"core","user_id":"mallory"}}`, nil)
+	var thread threadResponse
+	decodeResponse(t, created, &thread)
+	if created.Code != http.StatusOK || thread.Metadata[store.OwnerMetadataKey] != "" {
+		t.Fatalf("created = %d %#v", created.Code, thread)
+	}
+	stored, _ := memory.Thread(context.Background(), thread.ThreadID)
+	if stored.Metadata[store.OwnerMetadataKey] != "alice" {
+		t.Fatalf("stored owner = %#v", stored.Metadata)
+	}
+	if response := perform(t, bob, http.MethodGet, "/api/threads/"+string(thread.ThreadID), "", nil); response.Code != http.StatusNotFound {
+		t.Fatalf("cross-owner get = %d", response.Code)
+	}
+	listed := perform(t, alice, http.MethodGet, "/api/threads?q=alpha&limit=10", "", nil)
+	var page struct {
+		Threads []threadResponse `json:"threads"`
+		Count   int              `json:"count"`
+	}
+	decodeResponse(t, listed, &page)
+	if len(page.Threads) != 1 || page.Count != 1 {
+		t.Fatalf("list = %#v", page)
+	}
+	searched := perform(t, alice, http.MethodPost, "/api/threads/search", `{"metadata":{"team":"core"}}`, nil)
+	var results []threadResponse
+	decodeResponse(t, searched, &results)
+	if len(results) != 1 || results[0].ThreadID != thread.ThreadID {
+		t.Fatalf("search = %#v", results)
+	}
+	patched := perform(t, alice, http.MethodPatch, "/api/threads/"+string(thread.ThreadID), `{"title":"Renamed","metadata":{"pinned":"true","user_id":"bob"}}`, nil)
+	decodeResponse(t, patched, &thread)
+	if patched.Code != http.StatusOK || thread.Title != "Renamed" || thread.Metadata["pinned"] != "true" {
+		t.Fatalf("patch = %d %#v", patched.Code, thread)
+	}
+	stored, _ = memory.Thread(context.Background(), thread.ThreadID)
+	if stored.Metadata[store.OwnerMetadataKey] != "alice" {
+		t.Fatalf("patch changed owner = %#v", stored.Metadata)
+	}
+	if response := perform(t, alice, http.MethodGet, "/api/threads?limit=0", "", nil); response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid page = %d", response.Code)
+	}
+}
+
+func TestThreadHistoryStateAndDeletion(t *testing.T) {
+	t.Parallel()
+	memory := store.NewMemory()
+	cleaner := &cleanupRecorder{}
+	handler, _ := New(Config{Store: memory, Cleaner: cleaner})
+	created := perform(t, handler, http.MethodPost, "/api/threads", `{"title":"History"}`, nil)
+	var thread threadResponse
+	decodeResponse(t, created, &thread)
+	createdRun := perform(t, handler, http.MethodPost, "/api/threads/"+string(thread.ThreadID)+"/runs", `{}`, nil)
+	var run runResponse
+	decodeResponse(t, createdRun, &run)
+	now := time.Now().UTC()
+	user, _ := domain.NewTextMessage(domain.RoleUser, "hello", now)
+	if err := conversation.PersistInputs(context.Background(), memory, thread.ThreadID, run.RunID, []domain.Message{user}); err != nil {
+		t.Fatal(err)
+	}
+	assistant, _ := domain.NewTextMessage(domain.RoleAssistant, "hi", now.Add(time.Second))
+	draft, _ := event.NewDraft(thread.ThreadID, run.RunID, event.MessageCompleted, assistant.CreatedAt, map[string]any{"message": assistant})
+	if _, err := memory.Append(context.Background(), run.RunID, 2, draft); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		"/api/threads/" + string(thread.ThreadID) + "/messages",
+		"/api/threads/" + string(thread.ThreadID) + "/runs/" + string(run.RunID) + "/messages",
+	} {
+		response := perform(t, handler, http.MethodGet, path, "", nil)
+		var messages []domain.Message
+		decodeResponse(t, response, &messages)
+		if response.Code != http.StatusOK || len(messages) != 2 {
+			t.Fatalf("messages %s = %d %#v", path, response.Code, messages)
+		}
+	}
+	limited := perform(t, handler, http.MethodGet, "/api/threads/"+string(thread.ThreadID)+"/messages?limit=1", "", nil)
+	var limitedMessages []domain.Message
+	decodeResponse(t, limited, &limitedMessages)
+	if len(limitedMessages) != 1 || limitedMessages[0].ID != assistant.ID {
+		t.Fatalf("limited messages = %#v", limitedMessages)
+	}
+	if response := perform(t, handler, http.MethodGet, "/api/threads/"+string(thread.ThreadID)+"/messages?limit=bad", "", nil); response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid message limit = %d", response.Code)
+	}
+	runs := perform(t, handler, http.MethodGet, "/api/threads/"+string(thread.ThreadID)+"/runs", "", nil)
+	var listed []runResponse
+	decodeResponse(t, runs, &listed)
+	if len(listed) != 1 || listed[0].RunID != run.RunID {
+		t.Fatalf("runs = %#v", listed)
+	}
+	state := perform(t, handler, http.MethodGet, "/api/threads/"+string(thread.ThreadID)+"/state", "", nil)
+	if state.Code != http.StatusOK || !strings.Contains(state.Body.String(), `"title":"History"`) || !strings.Contains(state.Body.String(), `"hello"`) {
+		t.Fatalf("state = %d %s", state.Code, state.Body.String())
+	}
+	deletePath := "/api/threads/" + string(thread.ThreadID)
+	if response := perform(t, handler, http.MethodDelete, deletePath, "", nil); response.Code != http.StatusConflict {
+		t.Fatalf("delete active = %d", response.Code)
+	}
+	running, _ := memory.TransitionRun(context.Background(), run.RunID, domain.RunPending, domain.RunRunning, now, "")
+	_, _ = memory.TransitionRun(context.Background(), running.ID, domain.RunRunning, domain.RunSucceeded, now.Add(time.Second), "")
+	if response := perform(t, handler, http.MethodDelete, deletePath, "", nil); response.Code != http.StatusOK {
+		t.Fatalf("delete = %d %s", response.Code, response.Body.String())
+	}
+	if cleaner.threadID != thread.ThreadID || cleaner.ownerID != "local" {
+		t.Fatalf("cleanup = %#v", cleaner)
+	}
+}
+
+func TestThreadManagementErrorResponses(t *testing.T) {
+	t.Parallel()
+	memory := store.NewMemory()
+	cleaner := &cleanupRecorder{prepareErr: errors.New("busy cleanup")}
+	handler, _ := New(Config{Store: memory, Cleaner: cleaner, OwnerResolver: func(context.Context) string { return "" }})
+	missing := newThreadID(t)
+	for _, path := range []string{
+		"/api/threads/" + string(missing) + "/state",
+		"/api/threads/" + string(missing) + "/runs",
+		"/api/threads/" + string(missing) + "/messages",
+	} {
+		if response := perform(t, handler, http.MethodGet, path, "", nil); response.Code != http.StatusNotFound {
+			t.Fatalf("GET %s = %d", path, response.Code)
+		}
+	}
+	if response := perform(t, handler, http.MethodGet, "/api/threads/"+string(missing)+"/runs/"+string(newRunID(t))+"/messages", "", nil); response.Code != http.StatusNotFound {
+		t.Fatalf("missing run messages = %d", response.Code)
+	}
+	if response := perform(t, handler, http.MethodPost, "/api/threads/search", `{"limit":201}`, nil); response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid search = %d", response.Code)
+	}
+	if response := perform(t, handler, http.MethodGet, "/api/threads?offset=bad", "", nil); response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid offset = %d", response.Code)
+	}
+	created := perform(t, handler, http.MethodPost, "/api/threads", `{}`, nil)
+	var thread threadResponse
+	decodeResponse(t, created, &thread)
+	if response := perform(t, handler, http.MethodPatch, "/api/threads/"+string(thread.ThreadID), `{}`, nil); response.Code != http.StatusBadRequest {
+		t.Fatalf("empty patch = %d", response.Code)
+	}
+	if response := perform(t, handler, http.MethodDelete, "/api/threads/"+string(thread.ThreadID), "", nil); response.Code != http.StatusInternalServerError {
+		t.Fatalf("cleanup preparation = %d", response.Code)
+	}
+	if _, err := memory.Thread(context.Background(), thread.ThreadID); err != nil {
+		t.Fatalf("prepare failure deleted thread: %v", err)
+	}
+	if metadata := publicMetadata(nil); len(metadata) != 0 {
+		t.Fatalf("publicMetadata(nil) = %#v", metadata)
 	}
 }
 

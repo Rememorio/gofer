@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -61,6 +63,76 @@ func (memory *Memory) Thread(ctx context.Context, id domain.ThreadID) (domain.Th
 	return cloneThread(thread), nil
 }
 
+// Threads returns an isolated, owner-scoped page ordered by recent activity.
+func (memory *Memory) Threads(ctx context.Context, query ThreadQuery) ([]domain.Thread, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
+	query, err := query.Normalize()
+	if err != nil {
+		return nil, err
+	}
+	memory.mu.RLock()
+	threads := make([]domain.Thread, 0, len(memory.threads))
+	for _, thread := range memory.threads {
+		if threadMatches(thread, query) {
+			threads = append(threads, cloneThread(thread))
+		}
+	}
+	memory.mu.RUnlock()
+	sort.Slice(threads, func(left, right int) bool {
+		return threads[left].UpdatedAt.After(threads[right].UpdatedAt) || threads[left].UpdatedAt.Equal(threads[right].UpdatedAt) && threads[left].ID > threads[right].ID
+	})
+	return pageThreads(threads, query.Offset, query.Limit), nil
+}
+
+// PatchThread atomically merges mutable conversation fields.
+func (memory *Memory) PatchThread(ctx context.Context, id domain.ThreadID, patch ThreadPatch, at time.Time) (domain.Thread, error) {
+	if err := contextError(ctx); err != nil {
+		return domain.Thread{}, err
+	}
+	if err := patch.Validate(); err != nil || at.IsZero() {
+		return domain.Thread{}, ErrInvalidQuery
+	}
+	memory.mu.Lock()
+	defer memory.mu.Unlock()
+	thread, exists := memory.threads[id]
+	if !exists {
+		return domain.Thread{}, fmt.Errorf("patch thread %s: %w", id, ErrNotFound)
+	}
+	applyThreadPatch(&thread, patch, at)
+	if err := thread.Validate(); err != nil {
+		return domain.Thread{}, err
+	}
+	memory.threads[id] = cloneThread(thread)
+	return cloneThread(thread), nil
+}
+
+// DeleteThread removes a conversation and terminal journal history.
+func (memory *Memory) DeleteThread(ctx context.Context, id domain.ThreadID) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	memory.mu.Lock()
+	defer memory.mu.Unlock()
+	if _, exists := memory.threads[id]; !exists {
+		return fmt.Errorf("delete thread %s: %w", id, ErrNotFound)
+	}
+	for _, run := range memory.runs {
+		if run.ThreadID == id && !run.Terminal() {
+			return fmt.Errorf("delete thread %s: active run %s: %w", id, run.ID, ErrConflict)
+		}
+	}
+	for runID, run := range memory.runs {
+		if run.ThreadID == id {
+			delete(memory.runs, runID)
+			delete(memory.events, runID)
+		}
+	}
+	delete(memory.threads, id)
+	return nil
+}
+
 // CreateRun persists run after verifying its parent thread.
 func (memory *Memory) CreateRun(ctx context.Context, run domain.Run) error {
 	if err := contextError(ctx); err != nil {
@@ -93,6 +165,29 @@ func (memory *Memory) Run(ctx context.Context, id domain.RunID) (domain.Run, err
 		return domain.Run{}, fmt.Errorf("run %s: %w", id, ErrNotFound)
 	}
 	return run, nil
+}
+
+// Runs returns an isolated, oldest-first execution history for a thread.
+func (memory *Memory) Runs(ctx context.Context, threadID domain.ThreadID) ([]domain.Run, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
+	memory.mu.RLock()
+	if _, exists := memory.threads[threadID]; !exists {
+		memory.mu.RUnlock()
+		return nil, fmt.Errorf("runs for thread %s: %w", threadID, ErrNotFound)
+	}
+	runs := make([]domain.Run, 0)
+	for _, run := range memory.runs {
+		if run.ThreadID == threadID {
+			runs = append(runs, run)
+		}
+	}
+	memory.mu.RUnlock()
+	sort.Slice(runs, func(left, right int) bool {
+		return runs[left].CreatedAt.Before(runs[right].CreatedAt) || runs[left].CreatedAt.Equal(runs[right].CreatedAt) && runs[left].ID < runs[right].ID
+	})
+	return runs, nil
 }
 
 // TransitionRun atomically advances a run when its current status equals expected.
@@ -241,6 +336,39 @@ func cloneThread(thread domain.Thread) domain.Thread {
 		}
 	}
 	return cloned
+}
+
+func threadMatches(thread domain.Thread, query ThreadQuery) bool {
+	if !ThreadOwnedBy(thread, query.OwnerID) || query.Text != "" && !strings.Contains(strings.ToLower(thread.Title), strings.ToLower(query.Text)) {
+		return false
+	}
+	for key, value := range query.Metadata {
+		if thread.Metadata[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func pageThreads(threads []domain.Thread, offset, limit int) []domain.Thread {
+	if offset >= len(threads) {
+		return []domain.Thread{}
+	}
+	end := min(len(threads), offset+limit)
+	return threads[offset:end]
+}
+
+func applyThreadPatch(thread *domain.Thread, patch ThreadPatch, at time.Time) {
+	if patch.Title != nil {
+		thread.Title = strings.TrimSpace(*patch.Title)
+	}
+	if thread.Metadata == nil && patch.Metadata != nil {
+		thread.Metadata = make(map[string]string)
+	}
+	for key, value := range patch.Metadata {
+		thread.Metadata[key] = value
+	}
+	thread.UpdatedAt = at.UTC()
 }
 
 func cloneEvents(records []event.Event) []event.Event {

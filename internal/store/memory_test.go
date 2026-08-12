@@ -250,6 +250,68 @@ func TestMemoryRejectsEventScopeMismatch(t *testing.T) {
 	}
 }
 
+func TestMemoryThreadCatalogLifecycle(t *testing.T) {
+	t.Parallel()
+	memory, thread, run := seededMemory(t)
+	thread.Metadata = map[string]string{OwnerMetadataKey: "alice", "project": "gofer"}
+	memory.mu.Lock()
+	memory.threads[thread.ID] = cloneThread(thread)
+	memory.mu.Unlock()
+	other, _ := domain.NewThread(time.Now().Add(time.Second))
+	other.Title = "Other project"
+	other.Metadata = map[string]string{OwnerMetadataKey: "bob"}
+	if err := memory.CreateThread(context.Background(), other); err != nil {
+		t.Fatal(err)
+	}
+	title := " Gofer research "
+	patched, err := memory.PatchThread(context.Background(), thread.ID, ThreadPatch{Title: &title, Metadata: map[string]string{"pinned": "true"}}, time.Now().Add(2*time.Second))
+	if err != nil || patched.Title != "Gofer research" || patched.Metadata["project"] != "gofer" || patched.Metadata["pinned"] != "true" {
+		t.Fatalf("PatchThread() = %#v, %v", patched, err)
+	}
+	threads, err := memory.Threads(context.Background(), ThreadQuery{OwnerID: "alice", Text: "research", Metadata: map[string]string{"project": "gofer"}})
+	if err != nil || len(threads) != 1 || threads[0].ID != thread.ID {
+		t.Fatalf("Threads() = %#v, %v", threads, err)
+	}
+	runs, err := memory.Runs(context.Background(), thread.ID)
+	if err != nil || len(runs) != 1 || runs[0].ID != run.ID {
+		t.Fatalf("Runs() = %#v, %v", runs, err)
+	}
+	if err = memory.DeleteThread(context.Background(), thread.ID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("DeleteThread(active) = %v", err)
+	}
+	running, _ := memory.TransitionRun(context.Background(), run.ID, domain.RunPending, domain.RunRunning, time.Now(), "")
+	_, _ = memory.TransitionRun(context.Background(), running.ID, domain.RunRunning, domain.RunSucceeded, time.Now(), "")
+	if err = memory.DeleteThread(context.Background(), thread.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = memory.Thread(context.Background(), thread.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Thread(deleted) = %v", err)
+	}
+}
+
+func TestThreadQueryPatchAndOwnershipValidation(t *testing.T) {
+	t.Parallel()
+	if _, err := (ThreadQuery{}).Normalize(); !errors.Is(err, ErrInvalidQuery) {
+		t.Fatalf("Normalize() = %v", err)
+	}
+	if _, err := (ThreadQuery{OwnerID: "alice", Metadata: map[string]string{OwnerMetadataKey: "bob"}}).Normalize(); !errors.Is(err, ErrInvalidQuery) {
+		t.Fatalf("Normalize(reserved metadata) = %v", err)
+	}
+	title := "x"
+	if err := (ThreadPatch{}).Validate(); !errors.Is(err, ErrInvalidQuery) {
+		t.Fatalf("Validate(empty) = %v", err)
+	}
+	if err := (ThreadPatch{Title: &title}).Validate(); err != nil {
+		t.Fatal(err)
+	}
+	legacy, _ := domain.NewThread(time.Now())
+	owned := legacy
+	owned.Metadata = map[string]string{OwnerMetadataKey: "alice"}
+	if !ThreadOwnedBy(legacy, "local") || ThreadOwnedBy(legacy, "alice") || !ThreadOwnedBy(owned, "alice") {
+		t.Fatal("ownership rules are incorrect")
+	}
+}
+
 func seededMemory(t *testing.T) (*Memory, domain.Thread, domain.Run) {
 	t.Helper()
 	now := time.Now().UTC()

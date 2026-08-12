@@ -178,6 +178,9 @@ func GatewayPolicy(request *http.Request) (Permission, bool) {
 		return RunsRead, false
 	}
 	if strings.HasPrefix(path, "/api/threads") {
+		if path == "/api/threads/search" && request.Method == http.MethodPost {
+			return ThreadsRead, false
+		}
 		if request.Method == http.MethodGet {
 			return ThreadsRead, false
 		}

@@ -36,6 +36,13 @@ func TestCatalogPresentListAndOpen(t *testing.T) {
 	if len(listed) != 2 || listed[0].Path != paths[1] || listed[1].Path != paths[0] {
 		t.Fatalf("List() = %#v", listed)
 	}
+	catalog.RemoveThread(thread.ID())
+	if listed = catalog.List(thread.ID()); len(listed) != 0 {
+		t.Fatalf("List(after remove) = %#v", listed)
+	}
+	if _, err = catalog.Present(context.Background(), thread, paths, at); err != nil {
+		t.Fatal(err)
+	}
 	reader, metadata, err := catalog.Open(thread, paths[0])
 	if err != nil {
 		t.Fatalf("Open(): %v", err)

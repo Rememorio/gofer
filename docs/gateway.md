@@ -12,11 +12,32 @@ store interface, so transport code does not own model or database behavior.
 - `GET /api/threads/{thread_id}` returns the DeerFlow-shaped status, values,
   interrupts, metadata, and timestamps, with Gofer's optional title as an
   additive field.
+- `GET /api/threads` and `POST /api/threads/search` return stable, paginated,
+  owner-scoped conversation feeds. `PATCH` merges title or metadata and
+  `DELETE` removes terminal run history plus thread-scoped external resources.
+- `GET /api/threads/{thread_id}/state`, `/messages`, and `/runs` expose durable
+  conversation state. Run-scoped `/messages` returns the messages produced by
+  one execution.
 - `POST /api/threads/{thread_id}/runs` persists a pending run and its first
   `run.created` event, then hands a validated DeerFlow launch envelope to the
   configured starter.
 - Run lookup, cancellation, event history, and SSE streaming use both thread
-  and run IDs to enforce resource scoping.
+and run IDs to enforce resource scoping.
+
+The gateway reserves the `user_id` metadata key for its authenticated owner.
+It is never accepted from or returned to clients. Every thread, run, event,
+state, and search operation verifies that owner; legacy records without an
+owner remain visible only in unauthenticated local mode.
+
+## Conversation continuity
+
+Input messages are committed to the run journal before model execution.
+Assistant and tool messages already use the same durable event stream. Before
+a later run starts, Gofer reconstructs the complete thread conversation and
+merges the request's non-overlapping suffix, so clients may send only the new
+turn or a compatible history window without duplicating context. The normal
+context-window middleware still compacts long conversations before each model
+call.
 
 The launch envelope supports input, command, assistant, metadata, config,
 context, checkpoint, interrupt, stream, disconnect, and multitask fields.
@@ -37,8 +58,10 @@ events. Terminal runs close their stream after all available events are sent.
 PostgreSQL. SQLite uses a pure-Go driver and one connection, enabling CGO-free
 cross-platform builds. PostgreSQL uses pgx through `database/sql`.
 
-Schema creation is idempotent. Run transitions and event appends use serializable
-transactions and optimistic status/sequence checks. Threads, runs, event data,
-timestamps, and metadata survive process restart. Journal watches poll the
-database rather than relying only on process-local signals, so events written
-by another service instance become visible to an SSE consumer.
+Schema creation is idempotent. Thread patches/deletes, run transitions, and
+event appends use serializable transactions and optimistic status/sequence
+checks. Threads, runs, event data, timestamps, and metadata survive process
+restart. Deletion is rejected while a run or local cleanup goroutine remains
+active. Journal watches poll the database rather than relying only on
+process-local signals, so events written by another service instance become
+visible to an SSE consumer.

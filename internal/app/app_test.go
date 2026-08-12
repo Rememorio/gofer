@@ -23,7 +23,9 @@ import (
 	"github.com/Rememorio/gofer/internal/config"
 	"github.com/Rememorio/gofer/internal/domain"
 	"github.com/Rememorio/gofer/internal/gateway"
+	"github.com/Rememorio/gofer/internal/scheduler"
 	"github.com/Rememorio/gofer/internal/store"
+	"github.com/Rememorio/gofer/internal/workspace"
 )
 
 func TestServiceRunsAgentThroughHTTP(t *testing.T) {
@@ -92,6 +94,117 @@ func TestServiceRunsAgentThroughHTTP(t *testing.T) {
 	_ = metrics.Body.Close()
 	if !bytes.Contains(metricsBody, []byte(`gofer_runs_total{status="succeeded"} 1`)) {
 		t.Fatalf("metrics = %s", metricsBody)
+	}
+}
+
+func TestServiceContinuesConversationAcrossRuns(t *testing.T) {
+	t.Parallel()
+	requests := make(chan []byte, 2)
+	var calls atomic.Int32
+	modelServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		requests <- body
+		turn := calls.Add(1)
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(writer,
+			fmt.Sprintf(`{"id":"c%d","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"answer %d"},"finish_reason":null}]}`, turn, turn),
+			fmt.Sprintf(`{"id":"c%d","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`, turn),
+		)
+	}))
+	defer modelServer.Close()
+	service, err := New(context.Background(), testConfig(t, modelServer.URL+"/v1"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = service.Close() }()
+	server := httptest.NewServer(service.Handler())
+	defer server.Close()
+	threadID := createThread(t, server.URL, "")
+	first := createRun(t, server.URL, threadID, `{"input":{"messages":[{"role":"user","content":"question one"}]}}`, "")
+	waitRun(t, server.URL, threadID, first, domain.RunSucceeded, "")
+	second := createRun(t, server.URL, threadID, `{"input":{"messages":[{"role":"user","content":"question two"}]}}`, "")
+	waitRun(t, server.URL, threadID, second, domain.RunSucceeded, "")
+	<-requests
+	secondRequest := <-requests
+	for _, want := range []string{"question one", "answer 1", "question two"} {
+		if !bytes.Contains(secondRequest, []byte(want)) {
+			t.Fatalf("second model request missing %q: %s", want, secondRequest)
+		}
+	}
+	request, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, server.URL+"/api/threads/"+string(threadID)+"/messages", nil)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	var messages []domain.Message
+	if err = json.NewDecoder(response.Body).Decode(&messages); err != nil || len(messages) != 4 {
+		t.Fatalf("messages = %#v, %v", messages, err)
+	}
+}
+
+func TestServiceThreadDeletionCleansScopedResources(t *testing.T) {
+	t.Parallel()
+	modelServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer modelServer.Close()
+	cfg := testConfig(t, modelServer.URL+"/v1")
+	service, err := New(context.Background(), cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = service.Close() }()
+	server := httptest.NewServer(service.Handler())
+	defer server.Close()
+	threadID := createThread(t, server.URL, "")
+	terminal, _ := domain.NewRun(threadID, time.Now())
+	if err = service.store.CreateRun(context.Background(), terminal); err != nil {
+		t.Fatal(err)
+	}
+	running, _ := service.store.TransitionRun(context.Background(), terminal.ID, domain.RunPending, domain.RunRunning, time.Now(), "")
+	_, _ = service.store.TransitionRun(context.Background(), running.ID, domain.RunRunning, domain.RunSucceeded, time.Now(), "")
+	service.mu.Lock()
+	service.active[terminal.ID] = func() {}
+	service.mu.Unlock()
+	if err = service.PrepareThreadDelete(context.Background(), threadID); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("PrepareThreadDelete(active) = %v", err)
+	}
+	service.mu.Lock()
+	delete(service.active, terminal.ID)
+	service.mu.Unlock()
+	threadWorkspace, err := service.workspaces.Open(threadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = threadWorkspace.CreateOutput(workspace.OutputsRoot+"/report.txt", []byte("report")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.artifacts.Present(context.Background(), threadWorkspace, []string{workspace.OutputsRoot + "/report.txt"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	_ = threadWorkspace.Close()
+	now := time.Now().UTC()
+	task := scheduler.Task{ID: "cleanup", UserID: "local", ThreadID: string(threadID), Title: "cleanup", Prompt: "prompt", ScheduleType: scheduler.Once, Schedule: now.Add(time.Hour).Format(time.RFC3339), Timezone: "UTC", Status: scheduler.Enabled, NextRunAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now}
+	if err = service.scheduled.Create(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	request, _ := http.NewRequestWithContext(context.Background(), http.MethodDelete, server.URL+"/api/threads/"+string(threadID), nil)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("delete status = %d", response.StatusCode)
+	}
+	if _, err = service.scheduled.Get(context.Background(), task.ID); !errors.Is(err, scheduler.ErrNotFound) {
+		t.Fatalf("scheduled task remains: %v", err)
+	}
+	if len(service.artifacts.List(threadID)) != 0 {
+		t.Fatal("artifact catalog remains")
+	}
+	workspacePath := filepath.Join(cfg.Workspace.Root, "threads", string(threadID))
+	if _, err = os.Stat(workspacePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("workspace remains: %v", err)
 	}
 }
 

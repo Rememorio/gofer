@@ -112,6 +112,16 @@ func (catalog *Catalog) List(threadID domain.ThreadID) []Artifact {
 	return artifacts
 }
 
+// RemoveThread forgets all presented artifacts for one deleted thread.
+func (catalog *Catalog) RemoveThread(threadID domain.ThreadID) {
+	if catalog == nil {
+		return
+	}
+	catalog.mu.Lock()
+	delete(catalog.entries, threadID)
+	catalog.mu.Unlock()
+}
+
 // Open verifies catalog membership and opens an artifact for streaming.
 func (catalog *Catalog) Open(thread *workspace.Thread, virtualPath string) (io.ReadCloser, Artifact, error) {
 	if catalog == nil || thread == nil {

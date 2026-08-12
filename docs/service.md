@@ -61,6 +61,22 @@ roles as well as LangChain's `human` and `ai` message types. Text and image
 content blocks, assistant tool calls, and tool results are normalized before
 execution.
 
+For later turns, clients may submit only the new user message. Gofer rebuilds
+prior user, assistant, and tool messages from the durable journal and supplies
+that history to the model automatically. Conversation feeds and state are
+available from:
+
+```text
+GET  /api/threads?limit=50&offset=0&q=research
+POST /api/threads/search
+GET  /api/threads/{thread_id}/state
+GET  /api/threads/{thread_id}/messages
+GET  /api/threads/{thread_id}/runs
+GET  /api/threads/{thread_id}/runs/{run_id}/messages
+PATCH /api/threads/{thread_id}
+DELETE /api/threads/{thread_id}
+```
+
 Run events are available as JSON or resumable server-sent events:
 
 ```text

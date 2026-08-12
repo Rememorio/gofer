@@ -30,9 +30,10 @@ func TestSQLiteScheduledTaskDefinitionLifecycle(t *testing.T) {
 	if err != nil || len(listed) != 1 {
 		t.Fatalf("List() = %#v, %v", listed, err)
 	}
-	title, schedule := "updated", "*/5 * * * *"
-	updated, err := database.Update(context.Background(), task.ID, task.UserID, scheduler.Update{Title: &title, Schedule: &schedule}, now)
-	if err != nil || updated.Title != title || !updated.NextRunAt.Equal(now.Add(5*time.Minute)) {
+	title, prompt, schedule, timezone := "updated", "updated prompt", "*/5 * * * *", "Asia/Shanghai"
+	kind := scheduler.Cron
+	updated, err := database.Update(context.Background(), task.ID, task.UserID, scheduler.Update{Title: &title, Prompt: &prompt, ScheduleType: &kind, Schedule: &schedule, Timezone: &timezone}, now)
+	if err != nil || updated.Title != title || updated.Prompt != prompt || updated.Timezone != timezone || !updated.NextRunAt.Equal(now.Add(5*time.Minute)) {
 		t.Fatalf("Update() = %#v, %v", updated, err)
 	}
 	listed, err = database.List(context.Background(), "other")
@@ -141,6 +142,13 @@ func TestSQLiteScheduledTaskFailuresAndOnce(t *testing.T) {
 	finished, err := database.Finish(context.Background(), task.ID, "worker", now, time.Time{}, scheduler.DispatchResult{}, errors.New("dispatch"))
 	if err != nil || finished.Status != scheduler.Failed || finished.LastError != "dispatch" {
 		t.Fatalf("Finish(failed) = %#v, %v", finished, err)
+	}
+	enabled, err := database.SetStatus(context.Background(), task.ID, task.UserID, scheduler.Enabled, now)
+	if err != nil || enabled.Status != scheduler.Enabled || enabled.NextRunAt.IsZero() {
+		t.Fatalf("SetStatus(re-enable) = %#v, %v", enabled, err)
+	}
+	if _, err = database.SetStatus(context.Background(), task.ID, "other", scheduler.Paused, now); !errors.Is(err, scheduler.ErrNotFound) {
+		t.Fatalf("SetStatus(scope) = %v", err)
 	}
 	if _, err = database.Finish(context.Background(), task.ID, "worker", now, time.Time{}, scheduler.DispatchResult{}, nil); !errors.Is(err, scheduler.ErrConflict) {
 		t.Fatalf("Finish(unleased) = %v", err)

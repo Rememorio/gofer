@@ -20,6 +20,7 @@ import (
 	"github.com/Rememorio/gofer/internal/config"
 	"github.com/Rememorio/gofer/internal/contextwindow"
 	"github.com/Rememorio/gofer/internal/control"
+	"github.com/Rememorio/gofer/internal/conversation"
 	"github.com/Rememorio/gofer/internal/domain"
 	"github.com/Rememorio/gofer/internal/event"
 	"github.com/Rememorio/gofer/internal/gateway"
@@ -261,7 +262,10 @@ func (service *Service) openBrowser() error {
 }
 
 func (service *Service) openHandler() error {
-	gatewayHandler, err := gateway.New(gateway.Config{Store: service.store, Starter: service, Canceller: service})
+	gatewayHandler, err := gateway.New(gateway.Config{
+		Store: service.store, Starter: service, Canceller: service, Cleaner: service,
+		OwnerResolver: requestUser,
+	})
 	if err != nil {
 		return err
 	}
@@ -284,6 +288,49 @@ func (service *Service) openHandler() error {
 	mux.HandleFunc("GET /metrics", service.serveMetrics)
 	service.handler = service.observeRequests(mux)
 	return nil
+}
+
+// PrepareThreadDelete rejects deletion until all local run goroutines exit.
+func (service *Service) PrepareThreadDelete(ctx context.Context, threadID domain.ThreadID) error {
+	service.mu.Lock()
+	active := make([]domain.RunID, 0, len(service.active))
+	for runID := range service.active {
+		active = append(active, runID)
+	}
+	service.mu.Unlock()
+	for _, runID := range active {
+		run, err := service.store.Run(ctx, runID)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+		if err == nil && run.ThreadID == threadID {
+			return store.ErrConflict
+		}
+	}
+	return nil
+}
+
+// CleanupThread removes non-store resources after durable thread deletion.
+func (service *Service) CleanupThread(ctx context.Context, threadID domain.ThreadID, ownerID string) error {
+	var cleanupErr error
+	if service.browser != nil {
+		if err := service.browser.CloseSession(string(threadID)); err != nil && !errors.Is(err, browser.ErrNotFound) {
+			cleanupErr = errors.Join(cleanupErr, err)
+		}
+	}
+	tasks, err := service.scheduled.List(ctx, ownerID)
+	if err != nil {
+		cleanupErr = errors.Join(cleanupErr, err)
+	} else {
+		for _, task := range tasks {
+			if task.ThreadID == string(threadID) {
+				cleanupErr = errors.Join(cleanupErr, service.scheduled.Delete(ctx, task.ID, ownerID))
+			}
+		}
+	}
+	service.artifacts.RemoveThread(threadID)
+	cleanupErr = errors.Join(cleanupErr, service.workspaces.Remove(threadID))
+	return cleanupErr
 }
 
 func buildAuthenticator(cfg config.AuthConfig) (*auth.StaticTokens, error) {
@@ -344,6 +391,15 @@ func (service *Service) selectProvider(name string) (configuredProvider, error) 
 
 func (service *Service) execute(ctx context.Context, launch gateway.StartRequest, messages []domain.Message, settings runSettings, provider configuredProvider) {
 	defer service.finishActive(launch.RunID)
+	messages, err := service.prepareConversation(ctx, launch, messages)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			service.settlePending(launch, context.Canceled)
+		} else {
+			service.failPending(launch, err)
+		}
+		return
+	}
 	threadWorkspace, err := service.workspaces.Open(launch.ThreadID)
 	if err != nil {
 		service.failPending(launch, err)
@@ -386,6 +442,18 @@ func (service *Service) execute(ctx context.Context, launch gateway.StartRequest
 	}
 	_ = service.metrics.Add("gofer_runs_total", map[string]string{"status": status}, 1)
 	_ = service.metrics.Observe("gofer_run_duration_seconds", map[string]string{"status": status}, time.Since(started).Seconds())
+}
+
+func (service *Service) prepareConversation(ctx context.Context, launch gateway.StartRequest, incoming []domain.Message) ([]domain.Message, error) {
+	history, err := conversation.Load(ctx, service.store, launch.ThreadID)
+	if err != nil {
+		return nil, err
+	}
+	combined, additions := conversation.Merge(history, incoming)
+	if err = conversation.PersistInputs(ctx, service.store, launch.ThreadID, launch.RunID, additions); err != nil {
+		return nil, err
+	}
+	return combined, nil
 }
 
 func (service *Service) buildTools(threadWorkspace *workspace.Thread, launch gateway.StartRequest, provider configuredProvider) (*tool.Registry, []runtime.Middleware, *subagent.Manager, error) {
@@ -683,6 +751,8 @@ func (service *Service) serveMetrics(writer http.ResponseWriter, _ *http.Request
 		http.Error(writer, "metrics unavailable", http.StatusInternalServerError)
 	}
 }
+
+var _ gateway.ThreadCleaner = (*Service)(nil)
 
 // Serve loads configuration, starts the HTTP listener, and shuts down gracefully.
 func Serve(ctx context.Context, configPath string, output io.Writer) error {

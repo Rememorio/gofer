@@ -162,6 +162,32 @@ func TestWorkspaceUploadsAreCollisionFree(t *testing.T) {
 	}
 }
 
+func TestManagerRemovesOnlyValidatedThreadWorkspace(t *testing.T) {
+	t.Parallel()
+	manager, err := NewManager(Config{Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadID, _ := domain.NewThreadID()
+	thread, err := manager.Open(threadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = thread.WriteFile(WorkspaceRoot+"/file.txt", []byte("content"), false); err != nil {
+		t.Fatal(err)
+	}
+	_ = thread.Close()
+	if err = manager.Remove(threadID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(manager.root, "threads", string(threadID))); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("thread workspace remains: %v", err)
+	}
+	if err = manager.Remove(domain.ThreadID("bad")); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("Remove(invalid) = %v", err)
+	}
+}
+
 func TestWorkspaceConcurrentUploadsAreCollisionFree(t *testing.T) {
 	t.Parallel()
 

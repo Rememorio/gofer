@@ -95,7 +95,7 @@ func TestMiddlewareGatewayPolicyAndContext(t *testing.T) {
 	}
 }
 
-func TestGatewayPolicyScheduledTasks(t *testing.T) {
+func TestGatewayPolicyResourceRoutes(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
 		method, path string
@@ -107,6 +107,7 @@ func TestGatewayPolicyScheduledTasks(t *testing.T) {
 		{http.MethodPatch, "/api/scheduled-tasks/task", ScheduledWrite},
 		{http.MethodPost, "/api/scheduled-tasks/task/trigger", ScheduledWrite},
 		{http.MethodGet, "/api/scheduled-tasks-extra", Admin},
+		{http.MethodPost, "/api/threads/search", ThreadsRead},
 	} {
 		request := httptest.NewRequestWithContext(context.Background(), test.method, test.path, nil)
 		permission, public := GatewayPolicy(request)
