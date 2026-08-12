@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/Rememorio/gofer/internal/delivery"
 	"github.com/Rememorio/gofer/internal/domain"
 	"github.com/Rememorio/gofer/internal/gateway"
+	"github.com/Rememorio/gofer/internal/loopdetect"
 	"github.com/Rememorio/gofer/internal/model"
 	"github.com/Rememorio/gofer/internal/readbeforewrite"
 	"github.com/Rememorio/gofer/internal/runtime"
@@ -49,12 +52,45 @@ func TestSubagentToolsRunIsolatedChildAgent(t *testing.T) {
 	if err = json.Unmarshal(waited.Output, &task); err != nil {
 		t.Fatal(err)
 	}
-	if task.Status != subagent.Succeeded || task.Output.Text != "child result" || task.Output.Metadata["parent_run_id"] != string(launch.RunID) || task.Output.Metadata["model"] != "test" || task.Output.Metadata["llm_call_count"] != "1" {
+	if task.Status != subagent.Succeeded || task.Output.Text != "child result" || task.Output.Metadata["parent_run_id"] != string(launch.RunID) || task.Output.Metadata["model"] != "test" || task.Output.Metadata["llm_call_count"] != "1" || task.Output.Metadata["stop_reason"] != "end_turn" {
 		t.Fatalf("task = %#v", task)
 	}
 	const guardedPrompt = "--- BEGIN USER INPUT ---\ninvestigate\n--- END USER INPUT ---"
 	if len(provider.Requests) != 1 || provider.Requests[0].Messages[0].Content[0].Text != guardedPrompt {
 		t.Fatalf("provider requests = %#v", provider.Requests)
+	}
+}
+
+func TestChildExecutorSurfacesLoopCappedStopReason(t *testing.T) {
+	t.Parallel()
+	service, threadWorkspace, launch := subagentFixture(t)
+	service.config.LoopDetection.WarnThreshold = 2
+	service.config.LoopDetection.HardLimit = 4
+	service.config.LoopDetection.ToolFrequencyWarn = 100
+	service.config.LoopDetection.ToolFrequencyLimit = 200
+	responses := make([][]model.Chunk, 4)
+	for index := range responses {
+		call := domain.ToolCall{
+			ID: fmt.Sprintf("list-%d", index), Name: "ls",
+			Arguments: json.RawMessage(`{"path":"/mnt/user-data/workspace","max_depth":1}`),
+		}
+		responses[index] = []model.Chunk{
+			{Kind: model.ChunkToolCall, ToolCall: &call},
+			{Kind: model.ChunkDone, StopReason: model.StopToolUse},
+		}
+	}
+	provider := &model.Scripted{Responses: responses}
+	executor := childExecutor{
+		service: service, workspace: threadWorkspace, launch: launch,
+		provider: configuredProvider{provider: provider, model: "test"},
+	}
+	output, err := executor.Execute(context.Background(), subagent.Request{Prompt: "loop", Depth: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.Metadata["stop_reason"] != string(model.StopLoopCapped) || output.Metadata["llm_call_count"] != "4" ||
+		!strings.Contains(output.Text, "FORCED STOP") || len(provider.Requests) != 4 {
+		t.Fatalf("output = %#v, requests=%d", output, len(provider.Requests))
 	}
 }
 
@@ -137,17 +173,19 @@ func TestChildExecutorSharesRunObservers(t *testing.T) {
 
 func assertFileGateOrdering(t *testing.T, middleware []runtime.Middleware) {
 	t.Helper()
-	compactorIndex, gateIndex := -1, -1
+	compactorIndex, gateIndex, loopIndex := -1, -1, -1
 	for index, candidate := range middleware {
 		switch candidate.(type) {
 		case *contextwindow.Compactor:
 			compactorIndex = index
 		case *readbeforewrite.Middleware:
 			gateIndex = index
+		case *loopdetect.Middleware:
+			loopIndex = index
 		}
 	}
-	if compactorIndex < 0 || gateIndex <= compactorIndex {
-		t.Fatalf("file gate must follow context compaction: %#v", middleware)
+	if compactorIndex < 0 || gateIndex <= compactorIndex || loopIndex <= gateIndex {
+		t.Fatalf("runtime guards are out of order: %#v", middleware)
 	}
 }
 
@@ -174,6 +212,7 @@ func TestBuildToolsClosesChildrenOnAssemblyErrors(t *testing.T) {
 	}
 	service.config.Runtime.MaxSubagents = maxSubagents
 	service.config.ReadBeforeWrite.Enabled = false
+	service.config.LoopDetection.Enabled = false
 	_, middleware, children, err := service.buildTools(threadWorkspace, launch, provider)
 	if err != nil {
 		t.Fatal(err)
@@ -182,6 +221,9 @@ func TestBuildToolsClosesChildrenOnAssemblyErrors(t *testing.T) {
 	for _, candidate := range middleware {
 		if _, ok := candidate.(*readbeforewrite.Middleware); ok {
 			t.Fatal("disabled read-before-write gate was assembled")
+		}
+		if _, ok := candidate.(*loopdetect.Middleware); ok {
+			t.Fatal("disabled loop detector was assembled")
 		}
 	}
 }

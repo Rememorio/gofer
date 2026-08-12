@@ -52,6 +52,13 @@ Optional agent extensions are initialized before the listener becomes ready:
   return a recoverable tool error, and same-path modifications are serialized
   across lead and child agents. While this gate is enabled, configuration
   validation requires `read_file` to remain exempt from tool-output budgeting.
+- `loop_detection.enabled` defaults to `true`. Equivalent tool-call sets are
+  tracked in a bounded sliding window, while a second counter catches excessive
+  use of one tool even when its arguments change. A warning is supplied only to
+  the next model request. Reaching a hard limit removes that response's tool
+  calls before journaling or execution and completes the run with
+  `stop_reason: loop_capped`. Per-tool frequency thresholds can override the
+  global values.
 - `subagent_spawn` starts bounded parallel child agents. Each child gets an
   isolated run journal and tool registry while sharing only the parent's
   policy-controlled workspace, configured extensions, and tenant scope. The

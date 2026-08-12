@@ -104,6 +104,9 @@ func TestRequestValidation(t *testing.T) {
 
 func TestChunkValidation(t *testing.T) {
 	t.Parallel()
+	if err := (Chunk{Kind: ChunkDone, StopReason: StopLoopCapped}).Validate(); err != nil {
+		t.Fatalf("loop-capped chunk error = %v", err)
+	}
 
 	tests := []Chunk{
 		{Kind: ChunkToolCall},

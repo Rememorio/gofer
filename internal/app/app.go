@@ -27,6 +27,7 @@ import (
 	"github.com/Rememorio/gofer/internal/feedback"
 	"github.com/Rememorio/gofer/internal/gateway"
 	"github.com/Rememorio/gofer/internal/guardrail"
+	"github.com/Rememorio/gofer/internal/loopdetect"
 	"github.com/Rememorio/gofer/internal/mcp"
 	"github.com/Rememorio/gofer/internal/memory"
 	"github.com/Rememorio/gofer/internal/model"
@@ -630,7 +631,26 @@ func (service *Service) runtimeMiddleware(threadID domain.ThreadID, provider con
 	if fileGate != nil {
 		middleware = append(middleware, fileGate)
 	}
+	if service.config.LoopDetection.Enabled {
+		loopGuard, loopErr := loopdetect.New(loopDetectionConfig(service.config.LoopDetection))
+		if loopErr != nil {
+			return nil, loopErr
+		}
+		middleware = append(middleware, loopGuard)
+	}
 	return middleware, nil
+}
+
+func loopDetectionConfig(source config.LoopDetectionConfig) loopdetect.Config {
+	overrides := make(map[string]loopdetect.FrequencyOverride, len(source.ToolOverrides))
+	for name, override := range source.ToolOverrides {
+		overrides[name] = loopdetect.FrequencyOverride{Warn: override.Warn, HardLimit: override.HardLimit}
+	}
+	return loopdetect.Config{
+		WarnThreshold: source.WarnThreshold, HardLimit: source.HardLimit, WindowSize: source.WindowSize,
+		ToolFrequencyWarn: source.ToolFrequencyWarn, ToolFrequencyLimit: source.ToolFrequencyLimit,
+		ToolOverrides: overrides,
+	}
 }
 
 func toolOutputConfig(source config.ToolOutputConfig) tooloutput.Config {

@@ -15,6 +15,15 @@ runtime:
   min_recent_messages: 8
   max_summary_chars: 20000
 
+loop_detection:
+  enabled: true
+  warn_threshold: 3
+  hard_limit: 5
+  window_size: 20
+  tool_freq_warn: 30
+  tool_freq_hard_limit: 50
+  tool_freq_overrides: {}
+
 # Require the agent to read the current version of an existing file before
 # every write_file or str_replace operation. New files are unaffected.
 read_before_write:

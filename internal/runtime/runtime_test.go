@@ -31,7 +31,7 @@ func TestRunnerCompletesTextTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run(): %v", err)
 	}
-	if result.Run.Status != domain.RunSucceeded || result.Turns != 1 || result.Usage.InputTokens != 3 {
+	if result.Run.Status != domain.RunSucceeded || result.Turns != 1 || result.Usage.InputTokens != 3 || result.StopReason != model.StopEndTurn {
 		t.Fatalf("Result = %#v", result)
 	}
 	if len(result.Messages) != 2 || result.Messages[1].Content[0].Text != "hello" {
@@ -337,6 +337,31 @@ func TestRunnerRejectsInvalidToolInterceptorResults(t *testing.T) {
 	}
 }
 
+func TestRunnerModelResponseTransformersComposeAndPreserveUsage(t *testing.T) {
+	t.Parallel()
+	response := model.Response{Text: "base", Usage: model.Usage{InputTokens: 3, OutputTokens: 2}, StopReason: model.StopEndTurn}
+	first := &responseBoundaryMiddleware{suffix: ":first"}
+	second := &responseBoundaryMiddleware{suffix: ":second"}
+	runner := &Runner{middleware: []Middleware{first, second}}
+	got, err := runner.transformModelResponse(context.Background(), response)
+	if err != nil || got.Text != "base:first:second" || got.Usage != response.Usage {
+		t.Fatalf("transformModelResponse() = %#v, %v", got, err)
+	}
+	if response.Text != "base" {
+		t.Fatalf("source response changed: %#v", response)
+	}
+
+	first.changeUsage = true
+	if _, err = runner.transformModelResponse(context.Background(), response); !errors.Is(err, ErrProtocol) {
+		t.Fatalf("usage mutation error = %v", err)
+	}
+	first.changeUsage = false
+	first.err = errInterceptorFailure
+	if _, err = runner.transformModelResponse(context.Background(), response); !errors.Is(err, errInterceptorFailure) {
+		t.Fatalf("transformer error = %v", err)
+	}
+}
+
 func TestRunnerFailsBeforeToolPersistenceOnResultBoundaryError(t *testing.T) {
 	t.Parallel()
 	registry := tool.NewRegistry()
@@ -448,6 +473,7 @@ func TestRunnerPersistsCancellation(t *testing.T) {
 
 func TestRunnerRejectsProtocolFailures(t *testing.T) {
 	t.Parallel()
+	duplicate := domain.ToolCall{ID: "same", Name: "echo", Arguments: json.RawMessage(`{"text":"x"}`)}
 
 	tests := []struct {
 		name   string
@@ -456,6 +482,7 @@ func TestRunnerRejectsProtocolFailures(t *testing.T) {
 	}{
 		{name: "truncated", chunks: []model.Chunk{{Kind: model.ChunkTextDelta, Text: "partial"}, {Kind: model.ChunkDone, StopReason: model.StopMaxTokens}}, want: ErrModelTruncated},
 		{name: "tool reason without calls", chunks: []model.Chunk{{Kind: model.ChunkTextDelta, Text: "x"}, {Kind: model.ChunkDone, StopReason: model.StopToolUse}}, want: ErrProtocol},
+		{name: "duplicate tool IDs", chunks: []model.Chunk{{Kind: model.ChunkToolCall, ToolCall: &duplicate}, {Kind: model.ChunkToolCall, ToolCall: &duplicate}, {Kind: model.ChunkDone, StopReason: model.StopToolUse}}, want: ErrProtocol},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -695,6 +722,24 @@ type fixedExecutionInterceptor struct {
 	NopMiddleware
 	result domain.ToolResult
 	err    error
+}
+
+type responseBoundaryMiddleware struct {
+	NopMiddleware
+	suffix      string
+	changeUsage bool
+	err         error
+}
+
+func (middleware *responseBoundaryMiddleware) TransformModelResponse(_ context.Context, response model.Response) (model.Response, error) {
+	if middleware.err != nil {
+		return model.Response{}, middleware.err
+	}
+	response.Text += middleware.suffix
+	if middleware.changeUsage {
+		response.Usage.InputTokens++
+	}
+	return response, nil
 }
 
 func (interceptor *fixedExecutionInterceptor) ExecuteTool(context.Context, domain.ToolCall, ToolExecutor) (domain.ToolResult, error) {

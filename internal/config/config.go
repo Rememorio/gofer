@@ -28,6 +28,7 @@ type Config struct {
 	LogLevel        string                `yaml:"log_level" json:"log_level"`
 	Server          ServerConfig          `yaml:"server" json:"server"`
 	Runtime         RuntimeConfig         `yaml:"runtime" json:"runtime"`
+	LoopDetection   LoopDetectionConfig   `yaml:"loop_detection" json:"loop_detection"`
 	ReadBeforeWrite ReadBeforeWriteConfig `yaml:"read_before_write" json:"read_before_write"`
 	ToolOutput      ToolOutputConfig      `yaml:"tool_output" json:"tool_output"`
 	Storage         StorageConfig         `yaml:"storage" json:"storage"`
@@ -47,6 +48,23 @@ type Config struct {
 // workspace and output files.
 type ReadBeforeWriteConfig struct {
 	Enabled bool `yaml:"enabled" json:"enabled"`
+}
+
+// LoopDetectionConfig controls repeated-call and per-tool frequency guards.
+type LoopDetectionConfig struct {
+	Enabled            bool                             `yaml:"enabled" json:"enabled"`
+	WarnThreshold      int                              `yaml:"warn_threshold" json:"warn_threshold"`
+	HardLimit          int                              `yaml:"hard_limit" json:"hard_limit"`
+	WindowSize         int                              `yaml:"window_size" json:"window_size"`
+	ToolFrequencyWarn  int                              `yaml:"tool_freq_warn" json:"tool_freq_warn"`
+	ToolFrequencyLimit int                              `yaml:"tool_freq_hard_limit" json:"tool_freq_hard_limit"`
+	ToolOverrides      map[string]ToolFrequencyOverride `yaml:"tool_freq_overrides" json:"tool_freq_overrides"`
+}
+
+// ToolFrequencyOverride replaces global frequency thresholds for one tool.
+type ToolFrequencyOverride struct {
+	Warn      int `yaml:"warn" json:"warn"`
+	HardLimit int `yaml:"hard_limit" json:"hard_limit"`
 }
 
 // ServerConfig controls the HTTP gateway listener.
@@ -231,6 +249,11 @@ func Defaults() Config {
 			MinRecentMessages: 8,
 			MaxSummaryChars:   20_000,
 		},
+		LoopDetection: LoopDetectionConfig{
+			Enabled: true, WarnThreshold: 3, HardLimit: 5, WindowSize: 20,
+			ToolFrequencyWarn: 30, ToolFrequencyLimit: 50,
+			ToolOverrides: make(map[string]ToolFrequencyOverride),
+		},
 		ReadBeforeWrite: ReadBeforeWriteConfig{Enabled: true},
 		ToolOutput: ToolOutputConfig{
 			Enabled: true, ExternalizeMinChars: 12_000,
@@ -324,6 +347,9 @@ func (config Config) Validate() error {
 	if err := validateToolOutput(config.ToolOutput); err != nil {
 		return err
 	}
+	if err := validateLoopDetection(config.LoopDetection); err != nil {
+		return err
+	}
 	if config.ReadBeforeWrite.Enabled && config.ToolOutput.Enabled && !contains(config.ToolOutput.ExemptTools, "read_file") {
 		return fmt.Errorf("%w: read_file must be exempt from tool output budgeting when read_before_write is enabled", ErrInvalid)
 	}
@@ -337,6 +363,21 @@ func (config Config) Validate() error {
 		return err
 	}
 	return validateModels(config.Models)
+}
+
+func validateLoopDetection(config LoopDetectionConfig) error {
+	if config.WarnThreshold < 1 || config.HardLimit < config.WarnThreshold || config.WindowSize < config.HardLimit || config.WindowSize > 10_000 {
+		return fmt.Errorf("%w: invalid loop detection repetition limits", ErrInvalid)
+	}
+	if config.ToolFrequencyWarn < 1 || config.ToolFrequencyLimit < config.ToolFrequencyWarn || config.ToolFrequencyLimit > 100_000 {
+		return fmt.Errorf("%w: invalid loop detection frequency limits", ErrInvalid)
+	}
+	for name, override := range config.ToolOverrides {
+		if strings.TrimSpace(name) != name || name == "" || override.Warn < 1 || override.HardLimit < override.Warn || override.HardLimit > 100_000 {
+			return fmt.Errorf("%w: invalid loop detection override %q", ErrInvalid, name)
+		}
+	}
+	return nil
 }
 
 func contains(values []string, want string) bool {

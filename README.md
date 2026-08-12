@@ -74,6 +74,10 @@ exactly one matching `write_file` or `str_replace` may follow before another
 read is required. Same-path writes are serialized across parent and child
 agents, so stale reads and concurrent duplicate appends fail with a
 model-correctable result instead of racing.
+Repetitive tool loops are bounded independently of the overall turn budget.
+Gofer detects both equivalent call sets and excessive use of one tool, injects
+a temporary model-facing warning before the limit, and strips the limiting
+call set before execution with an explicit `loop_capped` terminal reason.
 The `gofer serve` command now assembles the model provider, durable store,
 isolated workspaces, sandbox, browser, policy, runtime, gateway, graceful
 shutdown, and Prometheus endpoint into a runnable service. MCP tools, projected
@@ -114,6 +118,8 @@ Model-input trust boundaries are documented in
 [Prompt-injection guardrails](docs/guardrails.md).
 File version gating is documented in
 [Read before write](docs/read-before-write.md).
+Repetitive-call safety is documented in
+[Tool loop detection](docs/loop-detection.md).
 
 ## Development
 

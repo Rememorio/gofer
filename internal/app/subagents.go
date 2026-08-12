@@ -109,6 +109,7 @@ func childUsageMetadata(result runtime.Result, executor childExecutor) map[strin
 		"cache_read_tokens":  strconv.Itoa(result.Usage.CacheReadTokens),
 		"cache_write_tokens": strconv.Itoa(result.Usage.CacheWriteTokens),
 		"llm_call_count":     strconv.Itoa(result.Turns),
+		"stop_reason":        string(result.StopReason),
 	}
 }
 

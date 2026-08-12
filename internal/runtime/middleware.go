@@ -31,6 +31,13 @@ type ToolResultTransformer interface {
 	TransformToolResult(context.Context, domain.ToolCall, domain.ToolResult) (domain.ToolResult, error)
 }
 
+// ModelResponseTransformer optionally rewrites one fully collected response
+// before validation, journaling, or tool execution. Transformers run serially
+// in registration order and must preserve provider usage accounting.
+type ModelResponseTransformer interface {
+	TransformModelResponse(context.Context, model.Response) (model.Response, error)
+}
+
 // ToolExecutor invokes one tool call at the registry boundary. Execution
 // interceptors receive a next function so they can serialize, short-circuit,
 // or observe the actual operation without moving tool-specific policy into the

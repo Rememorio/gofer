@@ -84,6 +84,9 @@ const (
 	StopToolUse       StopReason = "tool_use"
 	StopMaxTokens     StopReason = "max_tokens"
 	StopContentFilter StopReason = "content_filter"
+	// StopLoopCapped identifies a host-side safety stop before repetitive tool
+	// calls were executed. Providers never need to emit this reason directly.
+	StopLoopCapped StopReason = "loop_capped"
 )
 
 // Response is the fully collected result of one model stream.
@@ -217,7 +220,7 @@ func (usage Usage) valid() bool {
 
 func (reason StopReason) valid() bool {
 	switch reason {
-	case StopEndTurn, StopToolUse, StopMaxTokens, StopContentFilter:
+	case StopEndTurn, StopToolUse, StopMaxTokens, StopContentFilter, StopLoopCapped:
 		return true
 	default:
 		return false

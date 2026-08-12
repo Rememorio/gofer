@@ -77,10 +77,11 @@ type Request struct {
 
 // Result is the completed durable run and normalized conversation state.
 type Result struct {
-	Run      domain.Run
-	Messages []domain.Message
-	Usage    model.Usage
-	Turns    int
+	Run        domain.Run
+	Messages   []domain.Message
+	Usage      model.Usage
+	Turns      int
+	StopReason model.StopReason
 }
 
 // NewRunner validates config and constructs a runner.
@@ -133,19 +134,20 @@ func (runner *Runner) Run(ctx context.Context, request Request) (Result, error) 
 	err = execution.finishError(ctx, err)
 	return Result{
 		Run: execution.state, Messages: append([]domain.Message(nil), execution.messages...),
-		Usage: execution.usage, Turns: execution.turns,
+		Usage: execution.usage, Turns: execution.turns, StopReason: execution.stopReason,
 	}, err
 }
 
 type execution struct {
-	runner    *Runner
-	request   Request
-	state     domain.Run
-	messages  []domain.Message
-	journal   journal
-	usage     model.Usage
-	turns     int
-	finalized bool
+	runner     *Runner
+	request    Request
+	state      domain.Run
+	messages   []domain.Message
+	journal    journal
+	usage      model.Usage
+	turns      int
+	stopReason model.StopReason
+	finalized  bool
 }
 
 type journal struct {
@@ -229,10 +231,8 @@ func (execution *execution) run(ctx context.Context) (Result, error) {
 			return Result{}, err
 		}
 		execution.messages = append(execution.messages, message)
-		if err := validateResponse(response); err != nil {
-			return Result{}, err
-		}
 		if len(response.ToolCalls) == 0 {
+			execution.stopReason = response.StopReason
 			return execution.complete(ctx)
 		}
 		results, err := execution.toolTurn(ctx, response.ToolCalls)
@@ -285,6 +285,13 @@ func (execution *execution) modelTurn(ctx context.Context) (model.Response, doma
 	}
 	response, err := execution.collect(ctx, stream)
 	if err != nil {
+		return model.Response{}, domain.Message{}, err
+	}
+	response, err = execution.runner.transformModelResponse(ctx, response)
+	if err != nil {
+		return model.Response{}, domain.Message{}, err
+	}
+	if err := validateResponse(response); err != nil {
 		return model.Response{}, domain.Message{}, err
 	}
 	message, err := assistantMessage(response, execution.runner.now())
@@ -464,6 +471,24 @@ func (runner *Runner) transformToolResult(ctx context.Context, call domain.ToolC
 	return result, nil
 }
 
+func (runner *Runner) transformModelResponse(ctx context.Context, response model.Response) (model.Response, error) {
+	for _, middleware := range runner.middleware {
+		transformer, ok := middleware.(ModelResponseTransformer)
+		if !ok {
+			continue
+		}
+		transformed, err := transformer.TransformModelResponse(ctx, response)
+		if err != nil {
+			return model.Response{}, fmt.Errorf("transform model response: %w", err)
+		}
+		if transformed.Usage != response.Usage {
+			return model.Response{}, fmt.Errorf("transform model response: %w: transformer changed usage", ErrProtocol)
+		}
+		response = transformed
+	}
+	return response, nil
+}
+
 func (execution *execution) complete(ctx context.Context) (Result, error) {
 	if err := execution.finalize(ctx); err != nil {
 		return Result{}, err
@@ -478,12 +503,13 @@ func (execution *execution) complete(ctx context.Context) (Result, error) {
 	if err := execution.journal.append(ctx, event.RunCompleted, map[string]any{
 		"turns": execution.turns, "usage": execution.usage,
 		"model": execution.request.Model, "caller": execution.request.Caller,
+		"stop_reason": execution.stopReason,
 	}); err != nil {
 		return Result{}, err
 	}
 	return Result{
 		Run: run, Messages: append([]domain.Message(nil), execution.messages...),
-		Usage: execution.usage, Turns: execution.turns,
+		Usage: execution.usage, Turns: execution.turns, StopReason: execution.stopReason,
 	}, nil
 }
 
@@ -619,6 +645,16 @@ func toolResultMessage(result domain.ToolResult, at time.Time) (domain.Message, 
 func validateResponse(response model.Response) error {
 	if response.StopReason == model.StopMaxTokens || response.StopReason == model.StopContentFilter {
 		return fmt.Errorf("%w: %s", ErrModelTruncated, response.StopReason)
+	}
+	callIDs := make(map[string]struct{}, len(response.ToolCalls))
+	for _, call := range response.ToolCalls {
+		if strings.TrimSpace(call.ID) == "" || strings.TrimSpace(call.Name) == "" || len(call.Arguments) == 0 || !json.Valid(call.Arguments) {
+			return fmt.Errorf("%w: invalid transformed tool call", ErrProtocol)
+		}
+		if _, duplicate := callIDs[call.ID]; duplicate {
+			return fmt.Errorf("%w: duplicate transformed tool call ID %q", ErrProtocol, call.ID)
+		}
+		callIDs[call.ID] = struct{}{}
 	}
 	hasTools := len(response.ToolCalls) > 0
 	if hasTools != (response.StopReason == model.StopToolUse) {

@@ -58,6 +58,10 @@ models:
 	if !config.ReadBeforeWrite.Enabled {
 		t.Fatal("default read-before-write gate was not preserved")
 	}
+	if !config.LoopDetection.Enabled || config.LoopDetection.WarnThreshold != 3 ||
+		config.LoopDetection.HardLimit != 5 || config.LoopDetection.ToolFrequencyLimit != 50 {
+		t.Fatalf("default loop detection was not preserved: %#v", config.LoopDetection)
+	}
 	if config.Sandbox.CommandTimeoutSeconds != 600 || config.Sandbox.NetworkEnabled {
 		t.Fatalf("default sandbox limits were not preserved: %#v", config.Sandbox)
 	}
@@ -70,14 +74,17 @@ models:
 	}
 }
 
-func TestLoadCanDisableReadBeforeWrite(t *testing.T) {
+func TestLoadCanDisableRuntimeGuards(t *testing.T) {
 	t.Parallel()
-	config, err := Load(strings.NewReader("config_version: 1\nread_before_write:\n  enabled: false\nstorage:\n  driver: memory\n"))
+	config, err := Load(strings.NewReader("config_version: 1\nloop_detection:\n  enabled: false\nread_before_write:\n  enabled: false\nstorage:\n  driver: memory\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if config.ReadBeforeWrite.Enabled {
 		t.Fatal("read-before-write remained enabled")
+	}
+	if config.LoopDetection.Enabled {
+		t.Fatal("loop detection remained enabled")
 	}
 }
 
@@ -120,6 +127,19 @@ func TestValidateRejectsInvalidConfigurations(t *testing.T) {
 		{name: "runtime reserve", mutate: func(config *Config) { config.Runtime.ReserveTokens = config.Runtime.MaxContextTokens }},
 		{name: "runtime recent", mutate: func(config *Config) { config.Runtime.MinRecentMessages = 0 }},
 		{name: "runtime summary", mutate: func(config *Config) { config.Runtime.MaxSummaryChars = 0 }},
+		{name: "loop warning zero", mutate: func(config *Config) { config.LoopDetection.WarnThreshold = 0 }},
+		{name: "loop hard before warning", mutate: func(config *Config) { config.LoopDetection.HardLimit = 2 }},
+		{name: "loop window short", mutate: func(config *Config) { config.LoopDetection.WindowSize = 4 }},
+		{name: "loop window high", mutate: func(config *Config) { config.LoopDetection.WindowSize = 10_001 }},
+		{name: "loop frequency zero", mutate: func(config *Config) { config.LoopDetection.ToolFrequencyWarn = 0 }},
+		{name: "loop frequency order", mutate: func(config *Config) { config.LoopDetection.ToolFrequencyLimit = 20 }},
+		{name: "loop frequency high", mutate: func(config *Config) { config.LoopDetection.ToolFrequencyLimit = 100_001 }},
+		{name: "loop blank override", mutate: func(config *Config) {
+			config.LoopDetection.ToolOverrides = map[string]ToolFrequencyOverride{" bad": {Warn: 1, HardLimit: 2}}
+		}},
+		{name: "loop override order", mutate: func(config *Config) {
+			config.LoopDetection.ToolOverrides = map[string]ToolFrequencyOverride{"bash": {Warn: 2, HardLimit: 1}}
+		}},
 		{name: "tool output negative", mutate: func(config *Config) { config.ToolOutput.FallbackMaxChars = -1 }},
 		{name: "tool output nested directory", mutate: func(config *Config) { config.ToolOutput.StorageSubdir = "cache/results" }},
 		{name: "tool output dot directory", mutate: func(config *Config) { config.ToolOutput.StorageSubdir = ".." }},
