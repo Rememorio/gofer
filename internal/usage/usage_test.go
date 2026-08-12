@@ -58,15 +58,16 @@ func TestAggregateFiltersRunLifecycleAndSyntheticHistory(t *testing.T) {
 	seedUsageRun(t, repository, thread.ID, domain.RunSucceeded, "primary", 2, 1, false)
 	seedUsageRun(t, repository, thread.ID, domain.RunFailed, "primary", 3, 1, false)
 	seedUsageRun(t, repository, thread.ID, domain.RunRunning, "active", 4, 1, false)
+	seedUsageRun(t, repository, thread.ID, domain.RunInterrupted, "clarification", 6, 1, false)
 	seedUsageRun(t, repository, thread.ID, domain.RunCancelled, "cancelled", 5, 1, false)
 	seedUsageRun(t, repository, thread.ID, domain.RunSucceeded, "synthetic", 100, 100, true)
 
 	summary, err := Aggregate(ctx, repository, thread.ID, false)
-	if err != nil || summary.TotalRuns != 2 || summary.TotalTokens != 7 || summary.ByModel["primary"].Runs != 2 || summary.ByCaller.LeadAgent != 7 {
+	if err != nil || summary.TotalRuns != 3 || summary.TotalTokens != 14 || summary.ByModel["primary"].Runs != 2 || summary.ByModel["clarification"].Runs != 1 || summary.ByCaller.LeadAgent != 14 {
 		t.Fatalf("Aggregate() = %#v, %v", summary, err)
 	}
 	active, err := Aggregate(ctx, repository, thread.ID, true)
-	if err != nil || active.TotalRuns != 3 || active.TotalTokens != 12 || active.ByModel["active"].Runs != 1 {
+	if err != nil || active.TotalRuns != 4 || active.TotalTokens != 19 || active.ByModel["active"].Runs != 1 {
 		t.Fatalf("Aggregate(active) = %#v, %v", active, err)
 	}
 	missing, _ := domain.NewThreadID()

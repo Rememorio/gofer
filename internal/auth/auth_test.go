@@ -108,6 +108,7 @@ func TestGatewayPolicyResourceRoutes(t *testing.T) {
 		{http.MethodPost, "/api/scheduled-tasks/task/trigger", ScheduledWrite},
 		{http.MethodGet, "/api/scheduled-tasks-extra", Admin},
 		{http.MethodPost, "/api/threads/search", ThreadsRead},
+		{http.MethodGet, "/api/threads/x/human-input", ThreadsRead},
 		{http.MethodGet, "/api/models", ResourcesRead},
 		{http.MethodPost, "/api/input-polish", RunsCreate},
 		{http.MethodGet, "/api/suggestions/config", ResourcesRead},

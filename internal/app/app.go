@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"github.com/Rememorio/gofer/internal/feedback"
 	"github.com/Rememorio/gofer/internal/gateway"
 	"github.com/Rememorio/gofer/internal/guardrail"
+	"github.com/Rememorio/gofer/internal/humaninput"
 	"github.com/Rememorio/gofer/internal/loopdetect"
 	"github.com/Rememorio/gofer/internal/mcp"
 	"github.com/Rememorio/gofer/internal/memory"
@@ -57,29 +59,30 @@ import (
 
 // Service owns shared adapters and active asynchronous runs.
 type Service struct {
-	ctx        context.Context
-	cancel     context.CancelFunc
-	config     config.Config
-	store      store.Store
-	closeStore io.Closer
-	workspaces *workspace.Manager
-	uploads    *uploads.Manager
-	artifacts  *artifact.Catalog
-	controls   *control.Service
-	feedback   feedback.Store
-	browser    *browser.Manager
-	research   *webresearch.Client
-	mcp        *mcp.Client
-	skills     *skill.Catalog
-	skillMount string
-	memories   memory.Store
-	scheduled  scheduler.Store
-	scheduler  *scheduler.Engine
-	providers  map[string]configuredProvider
-	metrics    *observe.Registry
-	handler    http.Handler
-	logger     *slog.Logger
-	resources  sync.Mutex
+	ctx          context.Context
+	cancel       context.CancelFunc
+	config       config.Config
+	store        store.Store
+	closeStore   io.Closer
+	workspaces   *workspace.Manager
+	uploads      *uploads.Manager
+	artifacts    *artifact.Catalog
+	controls     *control.Service
+	feedback     feedback.Store
+	browser      *browser.Manager
+	research     *webresearch.Client
+	mcp          *mcp.Client
+	skills       *skill.Catalog
+	skillMount   string
+	memories     memory.Store
+	scheduled    scheduler.Store
+	scheduler    *scheduler.Engine
+	providers    map[string]configuredProvider
+	metrics      *observe.Registry
+	handler      http.Handler
+	logger       *slog.Logger
+	resources    sync.Mutex
+	conversation sync.Mutex
 
 	mu         sync.Mutex
 	active     map[domain.RunID]context.CancelFunc
@@ -529,6 +532,9 @@ func (service *Service) execute(ctx context.Context, launch gateway.StartRequest
 	if service.skills != nil {
 		settings.system = strings.TrimSpace(settings.system + "\n\n" + service.skills.IndexPrompt())
 	}
+	if settings.disableClarification {
+		ctx = humaninput.WithDisabled(ctx)
+	}
 	runner, err := runtime.NewRunner(runtime.RunnerConfig{
 		Store: service.store, Provider: provider.provider, Tools: registry, Middleware: middleware,
 		FinishHooks: finishHooks,
@@ -562,11 +568,16 @@ func (service *Service) execute(ctx context.Context, launch gateway.StartRequest
 }
 
 func (service *Service) prepareConversation(ctx context.Context, launch gateway.StartRequest, incoming []domain.Message) ([]domain.Message, error) {
+	service.conversation.Lock()
+	defer service.conversation.Unlock()
 	history, err := conversation.Load(ctx, service.store, launch.ThreadID)
 	if err != nil {
 		return nil, err
 	}
 	combined, additions := conversation.Merge(history, incoming)
+	if err = humaninput.ValidateIncoming(history, additions); err != nil {
+		return nil, err
+	}
 	if err = conversation.PersistInputs(ctx, service.store, launch.ThreadID, launch.RunID, additions); err != nil {
 		return nil, err
 	}
@@ -579,6 +590,9 @@ func (service *Service) buildTools(threadWorkspace *workspace.Thread, launch gat
 		return nil, nil, nil, err
 	}
 	if err := service.registerExtensionTools(registry, launch.ThreadID); err != nil {
+		return nil, nil, nil, err
+	}
+	if err := registry.Register(humaninput.Tool()); err != nil {
 		return nil, nil, nil, err
 	}
 	children, err := service.newSubagents(threadWorkspace, launch, provider, observers)
@@ -595,6 +609,9 @@ func (service *Service) buildTools(threadWorkspace *workspace.Thread, launch gat
 		return nil, nil, nil, err
 	}
 	middleware = append(middleware, observers...)
+	// Clarification must be last so it sees final normalized tool intent and
+	// makes a human-input pause exclusive.
+	middleware = append(middleware, &humaninput.Middleware{})
 	return registry, middleware, children, nil
 }
 
@@ -749,12 +766,16 @@ func loopDetectionConfig(source config.LoopDetectionConfig) loopdetect.Config {
 }
 
 func toolOutputConfig(source config.ToolOutputConfig) tooloutput.Config {
+	exemptTools := append([]string(nil), source.ExemptTools...)
+	if !slices.Contains(exemptTools, humaninput.ToolName) {
+		exemptTools = append(exemptTools, humaninput.ToolName)
+	}
 	return tooloutput.Config{
 		Enabled: source.Enabled, ExternalizeMinChars: source.ExternalizeMinChars,
 		PreviewHeadChars: source.PreviewHeadChars, PreviewTailChars: source.PreviewTailChars,
 		FallbackMaxChars: source.FallbackMaxChars, FallbackHeadChars: source.FallbackHeadChars,
 		FallbackTailChars: source.FallbackTailChars, StorageSubdir: source.StorageSubdir,
-		ExemptTools: append([]string(nil), source.ExemptTools...), ToolOverrides: source.ToolOverrides,
+		ExemptTools: exemptTools, ToolOverrides: source.ToolOverrides,
 	}
 }
 

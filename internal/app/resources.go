@@ -95,6 +95,7 @@ func (service *Service) listFeatures(writer http.ResponseWriter, _ *http.Request
 		"input_polish":         map[string]bool{"enabled": service.config.InputPolish.Enabled},
 		"file_uploads":         map[string]bool{"enabled": true},
 		"document_conversion":  map[string]bool{"enabled": service.config.Uploads.AutoConvertDocuments},
+		"human_input":          map[string]bool{"enabled": true},
 		"skills":               map[string]bool{"enabled": service.skills != nil},
 		"memory":               map[string]bool{"enabled": service.memories != nil},
 		"scheduler":            map[string]bool{"enabled": service.config.Scheduler.Enabled},

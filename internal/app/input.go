@@ -11,15 +11,17 @@ import (
 
 	"github.com/Rememorio/gofer/internal/domain"
 	"github.com/Rememorio/gofer/internal/gateway"
+	"github.com/Rememorio/gofer/internal/humaninput"
 	"github.com/Rememorio/gofer/internal/uploads"
 )
 
 type runSettings struct {
-	model       string
-	system      string
-	maxTokens   int
-	temperature *float64
-	uploads     []uploads.Reference
+	model                string
+	system               string
+	maxTokens            int
+	temperature          *float64
+	uploads              []uploads.Reference
+	disableClarification bool
 }
 
 type wireMessage struct {
@@ -133,12 +135,13 @@ func mergeSettings(settings runSettings, raw json.RawMessage) (runSettings, erro
 		return settings, nil
 	}
 	var value struct {
-		Model        string   `json:"model"`
-		System       string   `json:"system"`
-		SystemPrompt string   `json:"system_prompt"`
-		MaxTokens    int      `json:"max_tokens"`
-		Temperature  *float64 `json:"temperature"`
-		Configurable *struct {
+		Model                string   `json:"model"`
+		System               string   `json:"system"`
+		SystemPrompt         string   `json:"system_prompt"`
+		MaxTokens            int      `json:"max_tokens"`
+		Temperature          *float64 `json:"temperature"`
+		DisableClarification bool     `json:"disable_clarification"`
+		Configurable         *struct {
 			Model string `json:"model"`
 		} `json:"configurable"`
 	}
@@ -163,6 +166,7 @@ func mergeSettings(settings runSettings, raw json.RawMessage) (runSettings, erro
 	if value.Temperature != nil {
 		settings.temperature = value.Temperature
 	}
+	settings.disableClarification = settings.disableClarification || value.DisableClarification
 	return settings, nil
 }
 
@@ -200,8 +204,50 @@ func decodeMessage(raw json.RawMessage, at time.Time) (domain.Message, error) {
 	if err != nil {
 		return domain.Message{}, err
 	}
-	message := domain.Message{ID: id, Role: role, Content: contents, CreatedAt: at.UTC()}
+	metadata, err := decodeAdditionalMetadata(input.Additional)
+	if err != nil {
+		return domain.Message{}, err
+	}
+	if role != domain.RoleUser && metadata[humaninput.ResponseMetadataKey] != "" {
+		return domain.Message{}, errors.New("human_input_response requires a user message")
+	}
+	message := domain.Message{ID: id, Role: role, Content: contents, CreatedAt: at.UTC(), Metadata: metadata}
 	return message, message.Validate()
+}
+
+func decodeAdditionalMetadata(raw json.RawMessage) (map[string]string, error) {
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, nil
+	}
+	var additional map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &additional); err != nil || additional == nil {
+		return nil, errors.New("additional_kwargs must be an object")
+	}
+	metadata := make(map[string]string, 2)
+	if hiddenRaw, exists := additional[humaninput.HideFromUIKey]; exists {
+		var hidden bool
+		if err := json.Unmarshal(hiddenRaw, &hidden); err != nil {
+			return nil, errors.New("hide_from_ui must be a boolean")
+		}
+		if hidden {
+			metadata[humaninput.HideFromUIKey] = "true"
+		}
+	}
+	if responseRaw, exists := additional[humaninput.ResponseMetadataKey]; exists {
+		response, err := humaninput.ParseResponse(responseRaw)
+		if err != nil {
+			return nil, err
+		}
+		canonical, err := humaninput.ResponseMetadata(response)
+		if err != nil {
+			return nil, err
+		}
+		metadata[humaninput.ResponseMetadataKey] = canonical
+	}
+	if len(metadata) == 0 {
+		return nil, nil
+	}
+	return metadata, nil
 }
 
 func normalizeRole(role, messageType string) (domain.Role, error) {

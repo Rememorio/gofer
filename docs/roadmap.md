@@ -17,7 +17,7 @@ module is committed and pushed separately.
 6. **Coordination:** sub-agents, task limits, goals, todos, summarization, and
    long-term memory.
 7. **Application API:** DeerFlow-compatible thread/run REST endpoints, SSE,
-   uploads, artifacts, models, skills, and configuration.
+   structured human input, uploads, artifacts, models, skills, and configuration.
 8. **Platform:** SQLite/PostgreSQL durability, scheduling, channels,
    authentication, authorization, observability, and operational tooling.
 9. **Release closure:** end-to-end contract suites, Docker images, deployment

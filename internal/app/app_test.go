@@ -517,7 +517,7 @@ func TestServiceAssemblesBrowserAndDockerTools(t *testing.T) {
 	defer func() { _ = threadWorkspace.Close() }()
 	run, _ := domain.NewRun(thread.ID, time.Now())
 	registry, middleware, children, err := service.buildTools(threadWorkspace, gateway.StartRequest{RunID: run.ID, ThreadID: thread.ID}, service.providers["primary"])
-	if err != nil || len(registry.Definitions()) < 20 || len(middleware) != 11 {
+	if err != nil || len(registry.Definitions()) < 20 || len(middleware) != 12 {
 		t.Fatalf("buildTools() = %d, %d, %v", len(registry.Definitions()), len(middleware), err)
 	}
 	defer func() { _ = children.Close() }()
@@ -581,7 +581,7 @@ func TestServiceAssemblesSkillsAndScopedMemory(t *testing.T) {
 	defer func() { _ = threadWorkspace.Close() }()
 	run, _ := domain.NewRun(thread.ID, time.Now())
 	registry, middleware, children, err := service.buildTools(threadWorkspace, gateway.StartRequest{RunID: run.ID, ThreadID: thread.ID}, service.providers["primary"])
-	if err != nil || len(middleware) != 11 {
+	if err != nil || len(middleware) != 12 {
 		t.Fatalf("buildTools() = %d, %v", len(middleware), err)
 	}
 	defer func() { _ = children.Close() }()

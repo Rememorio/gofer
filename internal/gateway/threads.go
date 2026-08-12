@@ -8,6 +8,7 @@ import (
 
 	"github.com/Rememorio/gofer/internal/conversation"
 	"github.com/Rememorio/gofer/internal/domain"
+	"github.com/Rememorio/gofer/internal/humaninput"
 	"github.com/Rememorio/gofer/internal/store"
 )
 
@@ -17,6 +18,7 @@ func (handler *Handler) threadRoutes() {
 	handler.mux.HandleFunc("PATCH /api/threads/{thread_id}", handler.patchThread)
 	handler.mux.HandleFunc("DELETE /api/threads/{thread_id}", handler.deleteThread)
 	handler.mux.HandleFunc("GET /api/threads/{thread_id}/state", handler.getThreadState)
+	handler.mux.HandleFunc("GET /api/threads/{thread_id}/human-input", handler.getHumanInputState)
 	handler.mux.HandleFunc("GET /api/threads/{thread_id}/runs", handler.listRuns)
 	handler.mux.HandleFunc("GET /api/threads/{thread_id}/messages", handler.listThreadMessages)
 	handler.mux.HandleFunc("GET /api/threads/{thread_id}/runs/{run_id}/messages", handler.listRunMessages)
@@ -122,10 +124,59 @@ func (handler *Handler) getThreadState(writer http.ResponseWriter, request *http
 		writeError(writer, err)
 		return
 	}
+	humanState := humaninput.State(messages)
+	next := []string{}
+	interrupts := map[string]any{}
+	if len(humanState.OpenRequests) > 0 {
+		next = append(next, "human_input")
+		interrupts["human_input"] = humanState.OpenRequests
+	}
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"values": map[string]any{"messages": messages, "title": thread.Title}, "next": []string{},
-		"config": map[string]any{"configurable": map[string]any{"thread_id": thread.ID}},
+		"values": map[string]any{"messages": messages, "title": thread.Title}, "next": next,
+		"config":     map[string]any{"configurable": map[string]any{"thread_id": thread.ID}},
+		"interrupts": interrupts,
 	})
+}
+
+func (handler *Handler) getHumanInputState(writer http.ResponseWriter, request *http.Request) {
+	thread, err := handler.requestThread(request)
+	if err != nil {
+		writeError(writer, err)
+		return
+	}
+	messages, err := conversation.Load(request.Context(), handler.store, thread.ID)
+	if err != nil {
+		writeError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, humaninput.State(messages))
+}
+
+func (handler *Handler) currentThreadResponse(ctx context.Context, thread domain.Thread) (threadResponse, error) {
+	response := makeThreadResponse(thread)
+	runs, err := handler.store.Runs(ctx, thread.ID)
+	if err != nil {
+		return threadResponse{}, err
+	}
+	if len(runs) > 0 {
+		switch runs[len(runs)-1].Status {
+		case domain.RunPending, domain.RunRunning:
+			response.Status = "busy"
+		case domain.RunInterrupted:
+			response.Status = "interrupted"
+		case domain.RunSucceeded, domain.RunFailed, domain.RunCancelled:
+		}
+	}
+	messages, err := conversation.Load(ctx, handler.store, thread.ID)
+	if err != nil {
+		return threadResponse{}, err
+	}
+	state := humaninput.State(messages)
+	if len(state.OpenRequests) > 0 {
+		response.Status = "interrupted"
+		response.Interrupts["human_input"] = state.OpenRequests
+	}
+	return response, nil
 }
 
 func (handler *Handler) listRuns(writer http.ResponseWriter, request *http.Request) {

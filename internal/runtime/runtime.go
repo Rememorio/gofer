@@ -128,7 +128,8 @@ func NewRunner(config RunnerConfig) (*Runner, error) {
 	}, nil
 }
 
-// Run starts or resumes request.RunID and drives it to a terminal state.
+// Run starts or resumes request.RunID and drives it to a terminal or
+// human-input-interrupted state.
 func (runner *Runner) Run(ctx context.Context, request Request) (Result, error) {
 	execution, err := runner.newExecution(ctx, request)
 	if err != nil {
@@ -260,11 +261,15 @@ func (execution *execution) run(ctx context.Context) (Result, error) {
 			}
 			return execution.complete(ctx)
 		}
-		results, err := execution.toolTurn(ctx, response.ToolCalls)
+		results, interrupted, err := execution.toolTurn(ctx, response.ToolCalls)
 		if err != nil {
 			return Result{}, err
 		}
 		execution.messages = append(execution.messages, results...)
+		if interrupted {
+			execution.stopReason = model.StopHumanInput
+			return execution.interrupt(ctx)
+		}
 	}
 	return Result{}, ErrTurnLimit
 }
@@ -382,19 +387,19 @@ func (execution *execution) collect(ctx context.Context, stream model.Stream) (m
 	return response, nil
 }
 
-func (execution *execution) toolTurn(ctx context.Context, calls []domain.ToolCall) ([]domain.Message, error) {
+func (execution *execution) toolTurn(ctx context.Context, calls []domain.ToolCall) ([]domain.Message, bool, error) {
 	outcomes := make([]toolOutcome, len(calls))
 	for index, call := range calls {
 		outcomes[index] = toolOutcome{call: call}
 		if err := execution.runner.beforeTool(ctx, call); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				return nil, ctxErr
+				return nil, false, ctxErr
 			}
 			outcomes[index].result = toolErrorResult(call.ID, err)
 			outcomes[index].skip = true
 		}
 		if err := execution.journal.append(ctx, event.ToolStarted, map[string]any{"call": call}); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 	execution.executeTools(ctx, outcomes)
@@ -446,18 +451,19 @@ func (runner *Runner) executeTool(ctx context.Context, call domain.ToolCall) (do
 	return result, nil
 }
 
-func (execution *execution) persistToolOutcomes(ctx context.Context, outcomes []toolOutcome) ([]domain.Message, error) {
+func (execution *execution) persistToolOutcomes(ctx context.Context, outcomes []toolOutcome) ([]domain.Message, bool, error) {
 	messages := make([]domain.Message, 0, len(outcomes))
+	interrupted := false
 	for _, outcome := range outcomes {
 		if outcome.err != nil {
-			return nil, outcome.err
+			return nil, false, outcome.err
 		}
 		if err := execution.runner.observeToolResult(ctx, outcome.call, outcome.result); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		result, err := execution.runner.transformToolResult(ctx, outcome.call, outcome.result)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		kind := event.ToolCompleted
 		if result.IsError {
@@ -465,19 +471,20 @@ func (execution *execution) persistToolOutcomes(ctx context.Context, outcomes []
 		}
 		message, err := toolResultMessage(result, execution.runner.now())
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if err := execution.journal.append(ctx, kind, map[string]any{
 			"call": outcome.call, "result": result, "message": message,
 		}); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if err := execution.runner.afterTool(ctx, outcome.call, result); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		messages = append(messages, message)
+		interrupted = interrupted || result.Interrupt
 	}
-	return messages, nil
+	return messages, interrupted, nil
 }
 
 func (runner *Runner) observeToolResult(ctx context.Context, call domain.ToolCall, result domain.ToolResult) error {
@@ -505,7 +512,7 @@ func (runner *Runner) transformToolResult(ctx context.Context, call domain.ToolC
 		if err != nil {
 			return domain.ToolResult{}, fmt.Errorf("transform tool %s result: %w", call.Name, err)
 		}
-		if transformed.CallID != result.CallID || transformed.IsError != result.IsError ||
+		if transformed.CallID != result.CallID || transformed.IsError != result.IsError || transformed.Interrupt != result.Interrupt ||
 			len(transformed.Output) == 0 || !json.Valid(transformed.Output) {
 			return domain.ToolResult{}, fmt.Errorf("transform tool %s result: %w: transformer changed identity, status, or JSON validity", call.Name, ErrProtocol)
 		}
@@ -547,6 +554,30 @@ func (execution *execution) complete(ctx context.Context) (Result, error) {
 	}
 	execution.state = run
 	if err := execution.journal.append(ctx, event.RunCompleted, map[string]any{
+		"turns": execution.turns, "usage": execution.usage,
+		"model": execution.request.Model, "caller": execution.request.Caller,
+		"stop_reason": execution.stopReason,
+	}); err != nil {
+		return Result{}, err
+	}
+	return Result{
+		Run: run, Messages: append([]domain.Message(nil), execution.messages...),
+		Usage: execution.usage, Turns: execution.turns, StopReason: execution.stopReason,
+	}, nil
+}
+
+func (execution *execution) interrupt(ctx context.Context) (Result, error) {
+	if err := execution.finalize(ctx); err != nil {
+		return Result{}, err
+	}
+	run, err := execution.runner.store.TransitionRun(
+		ctx, execution.state.ID, domain.RunRunning, domain.RunInterrupted, execution.runner.now(), "",
+	)
+	if err != nil {
+		return Result{}, err
+	}
+	execution.state = run
+	if err := execution.journal.append(ctx, event.RunInterrupted, map[string]any{
 		"turns": execution.turns, "usage": execution.usage,
 		"model": execution.request.Model, "caller": execution.request.Caller,
 		"stop_reason": execution.stopReason,

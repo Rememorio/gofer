@@ -46,6 +46,10 @@ exposed through the same owner-scoped API. Upload ingestion now enforces both
 per-file and aggregate request limits, supports opt-in bounded Office/PDF to
 Markdown conversion, injects sanitized current-file outlines without changing
 durable user messages, and gives agents bounded historical upload discovery.
+Structured clarification now uses DeerFlow-compatible request, choice, and
+form artifacts. Clarification calls are side-effect exclusive, settle the run
+as `interrupted`, survive durable-store restarts, and accept validated
+structured or legacy next-turn answers without replaying a response.
 LangGraph clients can discover configured assistants and use create-and-stream,
 create-and-wait, stateless run, join, and run-scoped message compatibility
 endpoints over the same durable journal.
@@ -164,6 +168,8 @@ Automatic titles, input polishing, and follow-up suggestions are documented in
 [Conversation services](docs/conversation-services.md).
 Upload isolation, conversion, and model-context behavior are documented in
 [Uploads and document ingestion](docs/uploads.md).
+Durable clarification requests and replies are documented in
+[Structured human input](docs/human-input.md).
 
 ## Development
 

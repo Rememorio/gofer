@@ -120,7 +120,7 @@ func (database *SQL) SetThreadTitleIfEmpty(ctx context.Context, id domain.Thread
 	return thread, true, nil
 }
 
-// DeleteThread transactionally removes a conversation with only terminal runs.
+// DeleteThread transactionally removes a conversation with no actively executing runs.
 func (database *SQL) DeleteThread(ctx context.Context, id domain.ThreadID) error {
 	tx, err := database.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
@@ -140,7 +140,7 @@ func (database *SQL) DeleteThread(ctx context.Context, id domain.ThreadID) error
 			_ = rows.Close()
 			return err
 		}
-		if status != domain.RunSucceeded && status != domain.RunFailed && status != domain.RunCancelled {
+		if status != domain.RunSucceeded && status != domain.RunFailed && status != domain.RunCancelled && status != domain.RunInterrupted {
 			_ = rows.Close()
 			return store.ErrConflict
 		}

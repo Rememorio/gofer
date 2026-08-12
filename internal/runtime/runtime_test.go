@@ -152,6 +152,35 @@ func TestRunnerExecutesToolLoop(t *testing.T) {
 	})
 }
 
+func TestRunnerSettlesOnToolRequestedHumanInput(t *testing.T) {
+	t.Parallel()
+	call := domain.ToolCall{ID: "ask", Name: "echo", Arguments: json.RawMessage(`{"text":"confirm"}`)}
+	registry := tool.NewRegistry()
+	if err := registry.Register(echoTool(nil)); err != nil {
+		t.Fatal(err)
+	}
+	interceptor := &fixedExecutionInterceptor{result: domain.ToolResult{
+		CallID: call.ID, Output: json.RawMessage(`{"human_input":{"request_id":"clarification:ask"}}`), Interrupt: true,
+	}}
+	fixture := newFixtureWithMiddleware(t, [][]model.Chunk{{
+		{Kind: model.ChunkToolCall, ToolCall: &call},
+		{Kind: model.ChunkUsage, Usage: &model.Usage{InputTokens: 4, OutputTokens: 2}},
+		{Kind: model.ChunkDone, StopReason: model.StopToolUse},
+	}}, registry, []Middleware{interceptor})
+	result, err := fixture.runner.Run(context.Background(), fixture.request)
+	if err != nil || result.Run.Status != domain.RunInterrupted || result.StopReason != model.StopHumanInput ||
+		result.Turns != 1 || result.Run.Terminal() || len(fixture.provider.Requests) != 1 {
+		t.Fatalf("Run() = %#v, %v, requests=%d", result, err, len(fixture.provider.Requests))
+	}
+	if len(result.Messages) != 3 || !result.Messages[2].Content[0].ToolResult.Interrupt {
+		t.Fatalf("messages = %#v", result.Messages)
+	}
+	assertEventKinds(t, fixture.store, fixture.run.ID, []event.Kind{
+		event.RunStarted, event.MessageStarted, event.MessageCompleted,
+		event.ToolStarted, event.ToolCompleted, event.RunInterrupted,
+	})
+}
+
 func TestRunnerRunsToolsInParallel(t *testing.T) {
 	t.Parallel()
 

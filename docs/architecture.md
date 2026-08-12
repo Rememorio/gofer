@@ -37,6 +37,7 @@ Planned package groups:
 | `internal/control` | Optimistic per-thread goals and ordered todo plans |
 | `internal/event` | Typed immutable events and ordered journal contracts |
 | `internal/feedback` | Owner-scoped run ratings, comments, and aggregate statistics |
+| `internal/humaninput` | Structured clarification artifacts, answer validation, and pending-state projection |
 | `internal/delivery` | Run-scoped presentation tracking and terminal output verification |
 | `internal/thread` | Threads, messages, history, and checkpoints |
 | `internal/model` | Normalized model request, response, stream, and usage types |
@@ -110,3 +111,4 @@ Planned package groups:
 30. Provider SDK types never cross the normalized model boundary; all adapters preserve tool-call integrity and exact reported usage.
 31. Upload metadata is only a hint: model context is built from owner-scoped files verified on disk and never changes the durable user message.
 32. Derived document text cannot overwrite a user upload; conversion is opt-in, shell-free, time-bounded, output-bounded, and receives no service secrets.
+33. A clarification is exclusive of sibling tool effects, is journaled before interruption, and only a matching unanswered request can accept a structured reply.

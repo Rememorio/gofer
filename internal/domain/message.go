@@ -52,9 +52,10 @@ type ToolCall struct {
 
 // ToolResult describes the structured outcome of one tool invocation.
 type ToolResult struct {
-	CallID  string          `json:"call_id"`
-	Output  json.RawMessage `json:"output"`
-	IsError bool            `json:"is_error,omitempty"`
+	CallID    string          `json:"call_id"`
+	Output    json.RawMessage `json:"output"`
+	IsError   bool            `json:"is_error,omitempty"`
+	Interrupt bool            `json:"interrupt,omitempty"`
 }
 
 // Message is Gofer's durable, provider-independent conversation record.

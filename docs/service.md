@@ -156,6 +156,7 @@ available from:
 GET  /api/threads?limit=50&offset=0&q=research
 POST /api/threads/search
 GET  /api/threads/{thread_id}/state
+GET  /api/threads/{thread_id}/human-input
 GET  /api/threads/{thread_id}/messages
 GET  /api/threads/{thread_id}/runs
 GET  /api/threads/{thread_id}/runs/{run_id}/messages
@@ -172,6 +173,17 @@ atomically clones workspace, upload, and output files; a historical branch
 reports `skipped_historical_turn` and starts with an empty workspace so newer
 files cannot appear in older conversation state. The response exposes both
 the source identifiers and the workspace/history modes.
+
+The lead agent can pause for structured user input through
+`ask_clarification`. Choice and free-text requests use DeerFlow protocol v1;
+bounded multi-field forms use v2. The tool result contains both readable text
+and a `human_input` artifact, then the run settles as `interrupted` with stop
+reason `human_input`. Send the answer as a new user message with
+`additional_kwargs.human_input_response`, or send a visible plain reply to
+close the latest request compatibly. Thread state exposes pending requests in
+`interrupts.human_input`, while the dedicated `/human-input` endpoint returns
+complete pending and answered state. See
+[Structured human input](human-input.md).
 
 Run feedback is durable and owner-scoped:
 
@@ -213,9 +225,9 @@ GET  /api/runs/{run_id}/messages
 ```
 
 Every streaming creation response sets a canonical `Content-Location` header.
-Terminal streams briefly drain the durable journal so a status transition
-cannot race and hide the final `run.completed`, `run.failed`, or
-`run.cancelled` event. Posting an existing stream with `action=interrupt` or
+Settled streams briefly drain the durable journal so a status transition
+cannot race and hide the final `run.interrupted`, `run.completed`, `run.failed`,
+or `run.cancelled` event. Posting an existing stream with `action=interrupt` or
 `action=rollback` requests cancellation; `wait=1` waits for terminal state.
 
 Before that terminal event, every run emits one `run.delivery` receipt. Its
@@ -233,10 +245,11 @@ GET /api/threads/{thread_id}/token-usage
 GET /api/threads/{thread_id}/token-usage?include_active=true
 ```
 
-The response includes input/output/total tokens, completed run count, per-model
+The response includes input/output/total tokens, settled run count, per-model
 tokens and run participation, and `lead_agent`, `subagent`, and `middleware`
-caller buckets. By default aggregation includes successful and failed runs;
-`include_active=true` also exposes durable progress from running runs.
+caller buckets. By default aggregation includes successful, failed, and
+human-input-interrupted runs, while `include_active=true` also exposes durable
+progress from running runs.
 Automatically retried empty responses are represented by `model.retry` events,
 so their provider usage and LLM call count remain included exactly once.
 `context_usage` estimates the currently materialized conversation against the

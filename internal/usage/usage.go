@@ -106,12 +106,23 @@ func Summarize(records []event.Event) RunSummary {
 			addMessageUsage(&summary, record)
 		case event.ToolCompleted:
 			addSubagentUsage(&summary, record, seenSubagents)
-		case event.RunStarted, event.RunInterrupted, event.RunCompleted, event.RunFailed,
+		case event.RunInterrupted, event.RunCompleted:
+			applyTerminalStopReason(&summary, record)
+		case event.RunStarted, event.RunFailed,
 			event.RunCancelled, event.MessageStarted, event.MessageDelta, event.ToolStarted,
 			event.ToolFailed, event.CheckpointSaved, event.WorkspaceChanges, event.RunDelivery:
 		}
 	}
 	return summary
+}
+
+func applyTerminalStopReason(summary *RunSummary, record event.Event) {
+	var payload struct {
+		StopReason model.StopReason `json:"stop_reason"`
+	}
+	if event.Decode(record, &payload) == nil && payload.StopReason != "" {
+		summary.StopReason = string(payload.StopReason)
+	}
 }
 
 // Aggregate returns completed run usage, optionally including running progress.
@@ -283,7 +294,8 @@ func validUsage(usage model.Usage) bool {
 }
 
 func eligible(status domain.RunStatus, includeActive bool) bool {
-	return status == domain.RunSucceeded || status == domain.RunFailed || includeActive && status == domain.RunRunning
+	return status == domain.RunSucceeded || status == domain.RunFailed || status == domain.RunInterrupted ||
+		includeActive && status == domain.RunRunning
 }
 
 func safeAdd(current, next int) int {

@@ -98,6 +98,9 @@ const (
 	// was suppressed. Providers emit StopContentFilter; host middleware
 	// promotes the repaired terminal response to this run-level reason.
 	StopSafetyCapped StopReason = "safety_capped"
+	// StopHumanInput identifies a host-side pause after a tool requested a
+	// structured response from the user.
+	StopHumanInput StopReason = "human_input"
 )
 
 // Response is the fully collected result of one model stream.
@@ -232,7 +235,7 @@ func (usage Usage) valid() bool {
 func (reason StopReason) valid() bool {
 	switch reason {
 	case StopEndTurn, StopToolUse, StopMaxTokens, StopContentFilter, StopLoopCapped,
-		StopTerminalError, StopModelLengthCapped, StopSafetyCapped:
+		StopTerminalError, StopModelLengthCapped, StopSafetyCapped, StopHumanInput:
 		return true
 	default:
 		return false

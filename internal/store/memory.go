@@ -136,7 +136,7 @@ func (memory *Memory) SetThreadTitleIfEmpty(ctx context.Context, id domain.Threa
 	return cloneThread(thread), true, nil
 }
 
-// DeleteThread removes a conversation and terminal journal history.
+// DeleteThread removes a conversation with no actively executing runs.
 func (memory *Memory) DeleteThread(ctx context.Context, id domain.ThreadID) error {
 	if err := contextError(ctx); err != nil {
 		return err
@@ -147,7 +147,7 @@ func (memory *Memory) DeleteThread(ctx context.Context, id domain.ThreadID) erro
 		return fmt.Errorf("delete thread %s: %w", id, ErrNotFound)
 	}
 	for _, run := range memory.runs {
-		if run.ThreadID == id && !run.Terminal() {
+		if run.ThreadID == id && !run.Terminal() && run.Status != domain.RunInterrupted {
 			return fmt.Errorf("delete thread %s: active run %s: %w", id, run.ID, ErrConflict)
 		}
 	}

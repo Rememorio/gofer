@@ -227,8 +227,12 @@ func (handler *Handler) getThread(writer http.ResponseWriter, request *http.Requ
 		var thread domain.Thread
 		thread, err = handler.ownedThread(request.Context(), id)
 		if err == nil {
-			writeJSON(writer, http.StatusOK, makeThreadResponse(thread))
-			return
+			var response threadResponse
+			response, err = handler.currentThreadResponse(request.Context(), thread)
+			if err == nil {
+				writeJSON(writer, http.StatusOK, response)
+				return
+			}
 		}
 	}
 	writeError(writer, err)
@@ -388,7 +392,7 @@ func (handler *Handler) streamJournal(ctx context.Context, writer io.Writer, flu
 		if runErr != nil {
 			return
 		}
-		if current.Terminal() && terminalTimer == nil {
+		if runSettled(current) && terminalTimer == nil {
 			terminalTimer = time.NewTimer(500 * time.Millisecond)
 			terminalTimeout = terminalTimer.C
 		}
@@ -420,10 +424,14 @@ func (handler *Handler) writeAvailable(ctx context.Context, writer io.Writer, fl
 			return after, false, err
 		}
 		after = record.Sequence
-		terminal = terminal || record.Kind == event.RunCompleted || record.Kind == event.RunFailed || record.Kind == event.RunCancelled
+		terminal = terminal || record.Kind == event.RunInterrupted || record.Kind == event.RunCompleted || record.Kind == event.RunFailed || record.Kind == event.RunCancelled
 		flusher.Flush()
 	}
 	return after, terminal, nil
+}
+
+func runSettled(run domain.Run) bool {
+	return run.Terminal() || run.Status == domain.RunInterrupted
 }
 
 func (handler *Handler) scopedRun(request *http.Request) (domain.Run, error) {

@@ -15,9 +15,10 @@ store interface, so transport code does not own model or database behavior.
 - `GET /api/threads` and `POST /api/threads/search` return stable, paginated,
   owner-scoped conversation feeds. `PATCH` merges title or metadata and
   `DELETE` removes terminal run history plus thread-scoped external resources.
-- `GET /api/threads/{thread_id}/state`, `/messages`, and `/runs` expose durable
-  conversation state. Run-scoped `/messages` returns the messages produced by
-  one execution.
+- `GET /api/threads/{thread_id}/state`, `/human-input`, `/messages`, and `/runs`
+  expose durable conversation state. Run-scoped `/messages` returns the
+  messages produced by one execution. State marks an open structured
+  clarification in both `next` and `interrupts`.
 - `POST /api/threads/{thread_id}/branches` creates an owner-scoped conversation
   from a completed assistant turn. Its copied journal and optional latest
   workspace are independent from the source after creation.
@@ -53,6 +54,9 @@ store interface, so transport code does not own model or database behavior.
 - Every service-finalized journal contains a `run.delivery` fact before its terminal
   event. Runs that changed outputs add a presentation verdict; incomplete
   delivery converts an otherwise successful run to an error.
+- A structured clarification tool result precedes `run.interrupted`. SSE and
+  wait calls settle on that event, and a validated answer enters a later run
+  without mutating the original journal.
 
 The gateway reserves the `user_id` metadata key for its authenticated owner.
 It is never accepted from or returned to clients. Every thread, run, event,

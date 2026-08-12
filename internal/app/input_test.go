@@ -68,6 +68,18 @@ func TestDecodeLaunchAcceptsCurrentUploadMetadata(t *testing.T) {
 	}
 }
 
+func TestDecodeLaunchPreservesHumanInputResponse(t *testing.T) {
+	t.Parallel()
+	messages, settings, err := decodeLaunch(gateway.RunRequest{
+		Input:   json.RawMessage(`{"messages":[{"role":"user","content":"Staging","additional_kwargs":{"hide_from_ui":true,"human_input_response":{"version":1,"kind":"human_input_response","source":"ask_clarification","request_id":"clarification:ask","response_kind":"option","option_id":"option-1","value":"Staging"}}}]}`),
+		Context: json.RawMessage(`{"disable_clarification":true}`),
+	}, time.Now())
+	if err != nil || len(messages) != 1 || messages[0].Metadata["hide_from_ui"] != "true" ||
+		!strings.Contains(messages[0].Metadata["human_input_response"], `"request_id":"clarification:ask"`) || !settings.disableClarification {
+		t.Fatalf("messages/settings = %#v / %#v, %v", messages, settings, err)
+	}
+}
+
 func TestDecodeLaunchRejectsMalformedInputs(t *testing.T) {
 	t.Parallel()
 	tests := []gateway.RunRequest{
@@ -85,6 +97,9 @@ func TestDecodeLaunchRejectsMalformedInputs(t *testing.T) {
 		{Input: json.RawMessage(`{"messages":[{"role":"user","content":"x"}]}`), Context: json.RawMessage(`{"max_tokens":-1}`)},
 		{Input: json.RawMessage(`{"messages":[{"role":"user","content":"x"}]}`), Context: json.RawMessage(`{"temperature":3}`)},
 		{Input: json.RawMessage(`{"messages":[{"role":"user","content":"x","additional_kwargs":[]}]}`)},
+		{Input: json.RawMessage(`{"messages":[{"role":"user","content":"x","additional_kwargs":{"hide_from_ui":"yes"}}]}`)},
+		{Input: json.RawMessage(`{"messages":[{"role":"user","content":"x","additional_kwargs":{"human_input_response":{}}}]}`)},
+		{Input: json.RawMessage(`{"messages":[{"role":"assistant","content":"x","additional_kwargs":{"human_input_response":{"version":1,"kind":"human_input_response","source":"ask_clarification","request_id":"r","response_kind":"text","value":"x"}}}]}`)},
 		{Input: json.RawMessage(`{"messages":[{"role":"user","content":"x","files":{}}]}`)},
 		{Input: json.RawMessage(`{"messages":[{"role":"user","content":"x","files":[{"filename":"x","size":-1}]}]}`)},
 	}

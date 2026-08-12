@@ -159,7 +159,7 @@ func (handler *Handler) waitForTerminal(ctx context.Context, runID domain.RunID)
 	defer ticker.Stop()
 	for {
 		run, lookupErr := handler.store.Run(ctx, runID)
-		if lookupErr != nil || run.Terminal() {
+		if lookupErr != nil || runSettled(run) {
 			return run, lookupErr
 		}
 		select {
