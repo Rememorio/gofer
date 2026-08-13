@@ -1,114 +1,130 @@
 # Architecture
 
-Gofer treats an agent run as a durable state machine driven by immutable
-events. Model providers, tools, sandboxes, storage engines, and transports are
-adapters around that core.
+Gofer is a durable state machine with adapters around it. The core runtime does
+not depend on HTTP, database drivers, model SDKs, sandbox implementations, or
+channel providers.
 
-```text
-HTTP / CLI / Channels
-         |
-         v
-  Gateway and Run Service
-         |
-         v
-   Durable Agent Runtime ----> Event Journal / Checkpoints
-      |       |       |
-      v       v       v
-   Models   Tools   Sub-agents
-              |
-              v
-      Policy and Sandbox
+```mermaid
+flowchart TD
+    A["HTTP, CLI, scheduler, channels"] --> B["Application service"]
+    B --> C["Durable runtime"]
+    C --> D["Normalized model interface"]
+    C --> E["Typed tool registry"]
+    C --> F["Event and checkpoint store"]
+    E --> G["Policy middleware"]
+    G --> H["Workspace and sandbox adapters"]
+    F --> I["Memory, SQLite, PostgreSQL"]
 ```
 
-## Dependency Direction
+## Design principles
 
-The runtime domain must not import HTTP frameworks, database drivers, provider
-SDKs, or sandbox implementations. Adapters implement small interfaces owned by
-their consumers. This keeps replay tests deterministic and prevents one SDK
-from defining Gofer's public contracts.
+### Durable before observable
 
-Planned package groups:
+A run persists typed events before publishing them to SSE consumers. Live
+notifications are wake hints; clients always read ordered storage. This makes
+reconnect, replay, and multi-instance polling share one contract.
 
-| Area | Responsibility |
-| --- | --- |
-| `internal/runtime` | Run state machine, model/tool loop, cancellation, limits |
-| `internal/contextwindow` | Boundary-safe conversation compaction and summaries |
-| `internal/conversation` | Cross-run history reconstruction, branching, overlap merging, and input journaling |
-| `internal/control` | Optimistic per-thread goals and ordered todo plans |
-| `internal/event` | Typed immutable events and ordered journal contracts |
-| `internal/feedback` | Owner-scoped run ratings, comments, and aggregate statistics |
-| `internal/humaninput` | Structured clarification artifacts, answer validation, and pending-state projection |
-| `internal/delivery` | Run-scoped presentation tracking and terminal output verification |
-| `internal/thread` | Threads, messages, history, and checkpoints |
-| `internal/model` | Normalized model request, response, stream, and usage types |
-| `internal/model/providerfactory` | Validated provider selection without SDK leakage into the service |
-| `internal/model/openaichat` | OpenAI-compatible Chat Completions streaming adapter |
-| `internal/model/anthropicmessages` | Native Anthropic Messages streaming adapter |
-| `internal/modelservice` | Bounded tool-free model calls for auxiliary UI services |
-| `internal/usage` | Journal-derived run/thread token accounting and caller attribution |
-| `internal/tool` | Typed registry, validation, policy, and execution |
-| `internal/guardrail` | Temporary user-input framing and recursive untrusted-result neutralization |
-| `internal/loopdetect` | Bounded repeated-call and per-tool frequency detection |
-| `internal/toolhistory` | Transient provider-safe tool call/result transcript repair |
-| `internal/terminalresponse` | Bounded empty post-tool response recovery and visible fallback |
-| `internal/modellength` | Safe visible provider length-cap preservation |
-| `internal/safetyfinish` | Provider content-filter repair and unsafe tool-intent suppression |
-| `internal/tooloutput` | Typed result synopsis, atomic spill storage, and context-budget fallback |
-| `internal/mcp` | MCP transports, bounded discovery, and namespaced tool adapters |
-| `internal/policy` | Ordered authorization rules and tool resource extraction |
-| `internal/readbeforewrite` | Version-aware existing-file mutation gate and same-path execution serialization |
-| `internal/workspace` | Per-thread files, uploads, outputs, search, and traversal safety |
-| `internal/uploads` | Bounded conversion, outlines, current-file context, and upload discovery |
-| `internal/workspacechange` | Bounded run snapshots, privacy-aware diffs, and journal projection |
-| `internal/artifact` | Explicit user-facing output registration and streaming |
-| `internal/sandbox` | Local and isolated execution contracts |
-| `internal/browser` | Thread-scoped CDP sessions, snapshots, network guards, and browser tools |
-| `internal/netguard` | Shared DNS-aware URL validation and rebinding-resistant dialing |
-| `internal/webresearch` | Provider-neutral search, bounded document extraction, and agent tools |
-| `internal/skill` | Skill discovery, validation, activation, and projection |
-| `internal/subagent` | Bounded parallel delegation and event fan-in |
-| `internal/memory` | Scoped retrieval, consolidation, and lifecycle |
-| `internal/store` | Core durable store contract and in-memory reference adapter |
-| `internal/store/sqlstore` | Transactional SQLite and PostgreSQL persistence |
-| `internal/gateway` | DeerFlow-compatible REST and SSE transports |
-| `internal/channel` | Durable channel identities, conversation mapping, dedupe, bounded dispatch, signed webhooks, and native Slack, Telegram, Discord, Feishu/Lark, DingTalk, WeCom, and WeChat adapters |
-| `internal/auth` | Bearer authentication, principal context, and RBAC policy |
-| `internal/scheduler` | Cron/one-shot validation, durable leases, and dispatch |
-| `internal/extension` | Dependency-ordered component lifecycle and rollback |
-| `internal/observe` | Bounded-cardinality metrics and Prometheus exposition |
+### Interfaces at consumer boundaries
 
-## Invariants
+The runtime owns the interfaces it consumes. Provider SDK types are normalized
+at adapter boundaries, database behavior implements the store contract, and
+tools expose typed definitions rather than leaking implementation objects.
+
+### Side effects are explicit
+
+Model output cannot mutate the host directly. A side effect must become a
+validated tool call, pass policy middleware, resolve inside the thread scope,
+and receive a sandbox decision before execution.
+
+### One owner per goroutine
+
+Every background worker, channel source, browser session, scheduler loop, and
+subagent has a parent context, bounded work, and a shutdown path.
+
+## Core layers
+
+| Layer | Primary packages | Responsibility |
+| --- | --- | --- |
+| Domain | `internal/domain`, `internal/event` | IDs, messages, runs, typed immutable events |
+| Runtime | `internal/runtime`, `internal/conversation`, `internal/contextwindow` | Model/tool loop, history, compaction, cancellation, terminal outcome |
+| Coordination | `internal/control`, `internal/subagent`, `internal/memory`, `internal/humaninput` | Goals, todos, delegation, memory, clarification |
+| Tools | `internal/tool`, `internal/tool/builtin`, `internal/mcp`, `internal/skill` | Definitions, validation, built-ins, and extensions |
+| Safety | `internal/policy`, `internal/guardrail`, `internal/readbeforewrite`, `internal/loopdetect` | Authorization, untrusted-content handling, mutation and loop bounds |
+| Execution | `internal/workspace`, `internal/sandbox`, `internal/browser`, `internal/webresearch` | Files, commands, browser sessions, and network retrieval |
+| Persistence | `internal/store`, `internal/store/sqlstore` | In-memory reference state and SQL durability |
+| Transports | `internal/gateway`, `internal/channel`, `internal/app` | HTTP/SSE, chat providers, scheduling, and service assembly |
+| Providers | `internal/model/*` | OpenAI-compatible and Anthropic normalization |
+
+`main.go` only owns process signals and CLI dispatch. `internal/cli` parses
+commands, while `internal/app` assembles concrete adapters.
+
+## Durable run lifecycle
+
+1. The gateway validates a launch request and persists a pending run plus its
+   first event.
+2. The application reconstructs durable conversation history and selects a
+   configured model alias.
+3. Runtime middleware prepares bounded context and invokes the normalized model
+   stream.
+4. Assistant deltas become a response or typed tool calls.
+5. Tool calls pass schema validation, policy, workspace, concurrency, and
+   sandbox gates before execution.
+6. Tool results and model usage are journaled, then the loop continues within
+   configured turn and token limits.
+7. Outstanding child work is drained, workspace changes and delivery receipts
+   are persisted, and exactly one terminal state is committed.
+8. JSON and SSE clients observe the same journal and may replay it after a
+   disconnect.
+
+## Persistence model
+
+The durable store owns threads, runs, checkpoints, and ordered events. Feature
+stores for memory, feedback, controls, schedules, skills, and channel state use
+the same SQL connection when available.
+
+SQLite is a pure-Go, single-process default. PostgreSQL uses pgx and supports
+shared deployments. The in-memory adapter implements the same semantics for
+deterministic tests and disposable runs.
+
+Thread files are intentionally separate from the database. Each thread owns a
+bounded workspace with upload, working, output, and internal directories.
+Database and workspace backups must therefore be coordinated.
+
+## Runtime safeguards
+
+Middleware ordering is part of the runtime contract:
+
+- untrusted user and remote content is framed before model calls;
+- tool history is repaired only in provider-facing context, never in storage;
+- existing files require a current read revision before mutation;
+- same-path writes are serialized across lead and child agents;
+- repeated tool patterns and per-tool frequency have warning and hard limits;
+- oversized tool results are externalized before entering later model context;
+- unsafe length- or safety-capped tool intent is removed before execution;
+- a tool-using run ends with visible assistant text or an explicit failure.
+
+See [Security](security.md) for deployment-facing trust boundaries.
+
+## Architectural invariants
 
 1. A run has one ordered event sequence and one terminal outcome.
-2. Persisted events precede external publication, allowing lossless replay.
-3. Cancellation propagates through models, tools, sandboxes, and sub-agents.
-4. Tool arguments and model/provider data are untrusted until validated.
-5. Host side effects require policy approval before execution begins.
-6. Public protocol changes are additive or carry an explicit migration.
-7. Goroutines have an owner and a defined shutdown path.
-8. Extension discovery is bounded and publishes an atomic validated snapshot.
-9. Skill packages never follow symlinks and project into an agent-visible read-only tree.
-10. Host command execution is disabled by default; container execution starts from a read-only, capability-free, network-isolated baseline.
-11. Browser navigation and every intercepted HTTP request pass through the same fail-closed address policy.
-12. Child agents have explicit depth, total-count, and parallelism limits and an owned cancellation path.
-13. Long-term memory retrieval never crosses its authenticated user scope.
-14. Non-public HTTP routes fail closed when authentication or permission is absent.
-15. Scheduled work is dispatched only under an expiring owner lease.
-16. Durable thread state and files never cross an authenticated owner boundary.
-17. Conversation branches never mutate their source or expose files newer than the selected turn.
-18. Token totals are derived from immutable provider usage events and never double-count cache or reasoning detail.
-19. Workspace reviews drain child agents and commit before the terminal event; sensitive or unbounded content never enters the journal.
-20. Every service-finalized run has one delivery receipt; a successful run that changed outputs must have presented a matching path.
-21. Raw tool-result observers run before context transforms; only the bounded transformed result enters the journal and later model requests.
-22. User text stays durable in its original form; every model call receives temporary authority-tag neutralization and explicit user boundaries.
-23. Remote-content results are sanitized before budgeting or persistence, and tool trust classification is explicit metadata rather than a name heuristic.
-24. Every existing-file mutation consumes a matching current read revision; same-scope, same-path checks and execution are serialized.
-25. Loop warnings are temporary model context; hard-capped tool calls never enter the journal or execute.
-26. Every provider-bound tool call has exactly one adjacent result; recovery never rewrites durable history.
-27. A tool-using user turn ends with visible assistant text or an explicit durable run failure.
-28. Length-capped tool intent never executes; only visible tool-free partial text may complete as capped.
-29. Safety-capped responses are always visible and tool-free before any other response policy observes them.
-30. Provider SDK types never cross the normalized model boundary; all adapters preserve tool-call integrity and exact reported usage.
-31. Upload metadata is only a hint: model context is built from owner-scoped files verified on disk and never changes the durable user message.
-32. Derived document text cannot overwrite a user upload; conversion is opt-in, shell-free, time-bounded, output-bounded, and receives no service secrets.
-33. A clarification is exclusive of sibling tool effects, is journaled before interruption, and only a matching unanswered request can accept a structured reply.
+2. Persisted events precede external publication.
+3. Cancellation reaches models, tools, sandboxes, browsers, and subagents.
+4. Model, provider, repository, skill, MCP, upload, and channel data is
+   untrusted until validated at the appropriate boundary.
+5. Public side effects require authorization before execution begins.
+6. Thread state, files, memory, and channels never cross an authenticated owner
+   boundary.
+7. Provider SDK types never cross the normalized model interface.
+8. Existing-file mutations consume a matching current read revision.
+9. Length- or safety-capped tool intent never executes.
+10. Every goroutine and external resource has an owner and cleanup strategy.
+
+## Adding a capability
+
+Prefer a concrete implementation until a real consumer boundary needs an
+interface. Normalize external data immediately, keep persistence and transport
+concerns outside the runtime, and add contract tests for cancellation,
+malformed input, replay, and cleanup.
+
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for required quality gates.
