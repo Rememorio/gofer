@@ -1,54 +1,45 @@
 # Gofer
 
-> A durable, Go-native agent runtime for work that should survive more than one request.
+Gofer is a Go-native, single-binary agent runtime for durable, long-running
+work. It brings model streaming, typed tools, workspace isolation, event
+replay, persistence, scheduling, and chat channels into one inspectable
+service.
 
-[![CI](https://github.com/Rememorio/gofer/actions/workflows/ci.yml/badge.svg)](https://github.com/Rememorio/gofer/actions/workflows/ci.yml)
-[![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](go.mod)
-[![License](https://img.shields.io/github/license/Rememorio/gofer)](LICENSE)
+Gofer is inspired by [DeerFlow](https://github.com/bytedance/deer-flow), but it
+is an independent implementation—not an official ByteDance project or a port
+of DeerFlow's Python internals. Its goal is to provide the same class of
+super-agent backend through Go-native contracts and operationally simple
+deployment.
 
-Gofer turns language models into a stateful service: conversations have durable
-runs, tools execute behind explicit boundaries, events can be replayed, and
-long-running work can continue through subagents, schedules, or chat channels.
-It ships as one inspectable binary with SQLite by default and PostgreSQL for
-shared deployments.
+Gofer is most useful when you want:
 
-Gofer is inspired by [DeerFlow](https://github.com/bytedance/deer-flow), but is
-an independent implementation—not an official ByteDance project or a port of
-its Python internals.
+- durable conversation and control state across reconnects and process restarts;
+- an HTTP and SSE backend for conversations, tools, files, and human input;
+- explicit policy and sandbox checks before model-requested side effects;
+- SQLite for a local deployment or PostgreSQL for shared instances;
+- schedules, subagents, skills, MCP servers, and chat channels on one runtime;
+- a codebase whose state transitions and failure modes can be inspected.
 
-## Why Gofer
+It does not include DeerFlow's web interface, Python extension ABI, or hosted
+sandbox services. Those remain external clients and adapters around the Go
+runtime.
 
-- **Durable by default.** Threads, runs, messages, tool activity, usage, and
-  terminal outcomes are journaled before clients observe them.
-- **Safe execution.** Typed tools, policy checks, scoped workspaces, bounded
-  output, read-before-write protection, and sandbox decisions guard every
-  model-requested side effect.
-- **Built for long-running work.** Goals, todos, memory, context compaction,
-  structured clarification, schedules, and bounded parallel subagents share
-  one runtime.
-- **Open extension surfaces.** Add capabilities through MCP servers, portable
-  `SKILL.md` packages, browser automation, web research, or native Go adapters.
-- **Available where teams already work.** Connect Slack, Telegram, Discord,
-  Feishu/Lark, DingTalk, WeCom, WeChat, GitHub, Buzz/Nostr, or a signed webhook.
-- **Operationally small.** The gateway, runtime, persistence, scheduler,
-  channels, metrics, and CLI are delivered in a single Go binary.
+## Quick Start
 
-## Quick start
-
-You need Go 1.26 or newer and an OpenAI-compatible API key.
+Gofer requires Go 1.26 or newer and an OpenAI-compatible API key.
 
 ```sh
 git clone https://github.com/Rememorio/gofer.git
 cd gofer
 cp config.example.yaml config.yaml
-export OPENAI_API_KEY=your-key
+export OPENAI_API_KEY=<key>
 go run . serve --config config.yaml
 ```
 
-The default configuration listens on `127.0.0.1:8001`, stores durable state
+The example configuration listens on `127.0.0.1:8001`, stores durable state
 under `.gofer/`, and keeps host command execution disabled.
 
-Check the service and run a first task:
+Check the service and complete a first run:
 
 ```sh
 curl -sS http://127.0.0.1:8001/healthz
@@ -65,67 +56,95 @@ curl -sS -X POST http://127.0.0.1:8001/api/runs/wait \
   }'
 ```
 
-See [Getting started](docs/getting-started.md) for Docker, Anthropic, durable
-threads, streaming, and the first production settings to change.
+See [Getting Started](docs/getting-started.md) for Anthropic, Docker Compose,
+durable threads, streaming, and production settings.
 
-## What is included
+## Design Principles
+
+Durable first. Threads, runs, messages, tool activity, usage, and terminal
+outcomes are journaled before clients observe them. Live notifications are
+wake-up hints; ordered storage remains the source of truth.
+
+Explicit execution. Model output cannot mutate the host directly. Every side
+effect becomes a typed tool call and passes validation, policy, workspace, and
+sandbox boundaries before execution.
+
+One runtime. The gateway, agent loop, persistence, scheduler, channels,
+metrics, and CLI ship as one Go binary. Model providers, databases, sandboxes,
+and transports stay behind narrow adapters.
+
+Inspectable state. Events can be replayed, workspaces can be reviewed, and
+failures remain visible. Gofer favors ordinary Go interfaces and structured
+formats over hidden background behavior.
+
+## How It Works
+
+A run follows the same durable lifecycle whether it starts from HTTP, a
+schedule, or a chat channel:
+
+1. Validate the request and persist a pending run with its first event.
+2. Reconstruct conversation state and prepare bounded model context.
+3. Stream assistant text and typed tool requests from the selected provider.
+4. Validate and execute approved tools inside the thread's workspace boundary.
+5. Persist tool results, usage, checkpoints, and events before publishing them.
+6. Continue until the model finishes, requests human input, reaches a limit,
+   is cancelled, or fails.
+7. Commit one terminal outcome that JSON and resumable SSE clients can replay.
+
+The runtime owns this state machine. HTTP, SQL drivers, model SDKs, sandboxes,
+and channel providers are adapters around it. See
+[Architecture](docs/architecture.md) for the package boundaries and invariants.
+
+## Capabilities
 
 | Area | Included capabilities |
 | --- | --- |
 | Runtime | Streaming model/tool loop, cancellation, replay, context compaction, terminal recovery |
-| Coordination | Goals, todos, memory, structured human input, schedules, parallel subagents |
+| Coordination | Goals, todos, memory, structured human input, schedules, bounded parallel subagents |
 | Tools | Scoped files and artifacts, shell sandbox, browser, web research, MCP, skills |
 | Models | OpenAI-compatible Chat Completions and native Anthropic Messages |
 | Persistence | In-memory development store, SQLite, PostgreSQL, resumable SSE |
 | Platform | Bearer RBAC, Prometheus metrics, uploads, feedback, token usage, workspace review |
 | Channels | Slack, Telegram, Discord, Feishu/Lark, DingTalk, WeCom, WeChat, GitHub, Buzz/Nostr, webhook |
 
-## How it fits together
+## Safety Model
 
-```mermaid
-flowchart LR
-    C["HTTP clients and channels"] --> G["Gateway"]
-    G --> R["Durable agent runtime"]
-    R --> M["Model providers"]
-    R --> T["Typed tools"]
-    R --> E["Event journal"]
-    T --> P["Policy and sandbox"]
-    E --> S["SQLite or PostgreSQL"]
-```
+Gofer treats model output, repository content, uploads, remote pages, MCP
+results, skills, and channel messages as untrusted. Host execution is disabled
+by default; the Docker sandbox starts without network access and with bounded
+CPU, memory, processes, time, input, and output.
 
-The runtime owns the state machine; HTTP, databases, model SDKs, sandboxes, and
-channel providers are adapters around it. This keeps replay deterministic and
-prevents an integration SDK from defining the core contracts.
+These controls reduce authority and contain mistakes, but deployment choices
+still matter. Review [Security](docs/security.md) before enabling host execution,
+private-network access, remote Chrome, document conversion, MCP processes, or a
+public listener.
 
 ## Documentation
 
 | Guide | Use it for |
 | --- | --- |
-| [Getting started](docs/getting-started.md) | Install, launch, and complete a first run |
+| [Getting Started](docs/getting-started.md) | Install, launch, and complete a first run |
 | [Configuration](docs/configuration.md) | Models, storage, tools, auth, and optional services |
-| [API](docs/api.md) | Threads, runs, streaming, files, memory, schedules, and resources |
-| [Channels](docs/channels.md) | Messaging providers, binding codes, commands, and webhooks |
+| [HTTP API](docs/api.md) | Threads, runs, streaming, files, memory, schedules, and resources |
+| [Channels](docs/channels.md) | Providers, binding codes, commands, and webhooks |
 | [Deployment](docs/deployment.md) | Containers, releases, persistence, and upgrades |
-| [Security model](docs/security.md) | Trust boundaries, isolation, network policy, and operations |
+| [Security](docs/security.md) | Trust boundaries, isolation, network policy, and operations |
 | [Architecture](docs/architecture.md) | Runtime layers, durable lifecycle, and contributor invariants |
 | [Compatibility](docs/compatibility.md) | DeerFlow-aligned behavior and explicit non-goals |
 
 The [documentation index](docs/README.md) is the stable entry point for all
 project guides.
 
-## Project status
+## Project Status
 
 Gofer is usable and continuously validated, but its public API may still evolve
-before a 1.0 release. Compatibility claims are limited to behavior covered by
-contract tests; see [Compatibility](docs/compatibility.md) for the reference
-baseline and exclusions.
+before 1.0. Compatibility claims are limited to behavior covered by contract
+tests; the current reference baseline and exclusions are documented in
+[Compatibility](docs/compatibility.md).
 
 ## Contributing
 
-Bug reports and focused changes are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md)
-for architecture expectations, quality gates, and commit conventions. Report
-security issues privately according to [SECURITY.md](SECURITY.md).
-
-## License
-
-[MIT](LICENSE)
+Focused bug fixes, tests, documentation, and well-scoped capabilities are
+welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing runtime or
+protocol behavior, and report vulnerabilities privately through
+[SECURITY.md](SECURITY.md).
