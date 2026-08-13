@@ -148,3 +148,7 @@ Focused bug fixes, tests, documentation, and well-scoped capabilities are
 welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing runtime or
 protocol behavior, and report vulnerabilities privately through
 [SECURITY.md](SECURITY.md).
+
+## License
+
+Gofer is released under the [MIT License](LICENSE).
